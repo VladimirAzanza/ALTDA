@@ -2,7 +2,7 @@
 
 # ИИ-агент для образовательных программ АЦР — архитектура
 
-Oct 15, 2026 · @vladimir azanza
+Oct 15, 2026 · @vladimir azanza @danjos91 @alexaappelgants
 
 ## Резюме и ключевые решения
 
