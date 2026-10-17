@@ -180,25 +180,25 @@
     if (!s) {
       el.status.textContent = "нет программы";
       el.status.className = "badge";
-      el.hours.hidden = true;
-      el.working.hidden = true;
+      el.hours.classList.add("is-hidden");
+      el.working.classList.add("is-hidden");
       return;
     }
 
     el.status.textContent = STATUS_LABELS[s.status] || s.status;
     el.status.className = `badge ${statusClass(s.status, s.busy)}`;
-    el.working.hidden = !s.busy;
+    el.working.classList.toggle("is-hidden", !s.busy);
 
     const headerHours = s.program?.header?.totalHours;
     const totals = s.program?.curriculum?.totals?.total;
     if (headerHours != null && totals != null) {
-      el.hours.hidden = false;
+      el.hours.classList.remove("is-hidden");
       el.hours.textContent = `${totals}/${headerHours} ч`;
     } else if (headerHours != null) {
-      el.hours.hidden = false;
+      el.hours.classList.remove("is-hidden");
       el.hours.textContent = `заявлено ${headerHours} ч`;
     } else {
-      el.hours.hidden = true;
+      el.hours.classList.add("is-hidden");
     }
   }
 

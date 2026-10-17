@@ -392,6 +392,8 @@ label.field textarea { min-height: 110px; resize: vertical; }
   to { transform: none; opacity: 1; }
 }
 
+.is-hidden { display: none !important; }
+
 .working {
   display: inline-flex;
   align-items: center;
