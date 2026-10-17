@@ -201,16 +201,29 @@ public class HttpGoClient implements GoClient {
     }
 
     private static GoClientException transportFailure(String path, Exception ex) {
-        String code = GoClientException.LLM_ERROR;
-        String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
-        if (msg.contains("timeout") || msg.contains("timed out") || ex instanceof java.net.http.HttpTimeoutException
-                || ex instanceof java.net.SocketTimeoutException) {
-            code = GoClientException.LLM_TIMEOUT;
-        }
+        String code = isTimeout(ex) ? GoClientException.LLM_TIMEOUT : GoClientException.LLM_ERROR;
         return new GoClientException(
                 code,
                 "Go service call failed on " + path + ": " + ex.getMessage(),
                 GoClientException.canonicalHttpStatus(code),
                 ex);
+    }
+
+    /** Walk cause chain for {@link java.net.http.HttpTimeoutException} / socket timeouts. */
+    static boolean isTimeout(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof java.net.http.HttpTimeoutException
+                    || t instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("timed out") || lower.contains("timeout")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

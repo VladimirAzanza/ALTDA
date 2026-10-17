@@ -42,6 +42,13 @@ class ProgramStatusMachineTest {
     }
 
     @Test
+    void exportedAllowsReturnToEditing() {
+        assertTrue(ProgramStatusMachine.canTransition(ProgramStatus.EXPORTED, ProgramStatus.VALIDATED));
+        assertTrue(ProgramStatusMachine.canTransition(ProgramStatus.EXPORTED, ProgramStatus.CONTENT_GENERATING));
+        assertTrue(ProgramStatusMachine.canTransition(ProgramStatus.EXPORTED, ProgramStatus.SKELETON_PROPOSED));
+    }
+
+    @Test
     void mutationBlockedWhileBusyOrGenerating() {
         assertTrue(ProgramStatusMachine.isMutationBlocked(ProgramStatus.CLARIFYING, true));
         assertTrue(ProgramStatusMachine.isMutationBlocked(ProgramStatus.CONTENT_GENERATING, false));

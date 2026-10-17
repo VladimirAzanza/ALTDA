@@ -64,7 +64,12 @@ public final class ProgramStatusMachine {
                     ProgramStatus.CONTENT_GENERATING,
                     ProgramStatus.SKELETON_PROPOSED,
                     ProgramStatus.FAILED);
-            case EXPORTED -> EnumSet.noneOf(ProgramStatus.class);
+            // Export must not lock the program: allow return to editing after EXPORTED
+            case EXPORTED -> EnumSet.of(
+                    ProgramStatus.VALIDATED,
+                    ProgramStatus.CONTENT_GENERATING,
+                    ProgramStatus.SKELETON_PROPOSED,
+                    ProgramStatus.FAILED);
             case FAILED -> EnumSet.of(
                     ProgramStatus.CLARIFYING,
                     ProgramStatus.SKELETON_PROPOSED,

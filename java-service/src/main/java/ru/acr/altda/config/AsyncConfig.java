@@ -16,7 +16,8 @@ public class AsyncConfig implements AsyncConfigurer {
     @Bean(name = PROGRAM_EXECUTOR)
     public ThreadPoolTaskExecutor programTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        // Fixed pool: core == max (review); virtual threads also enabled in application.yml
+        // Dedicated platform-thread pool for @Async program jobs (core == max).
+        // spring.threads.virtual.enabled applies to the web server, not this executor.
         executor.setCorePoolSize(16);
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(100);

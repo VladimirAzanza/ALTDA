@@ -114,6 +114,15 @@ class HttpGoClientErrorMappingTest {
     }
 
     @Test
+    void timeoutDetectedViaHttpTimeoutExceptionCause() {
+        RuntimeException wrapped = new RuntimeException(
+                "call failed",
+                new java.net.http.HttpTimeoutException("request timed out"));
+        assertThat(HttpGoClient.isTimeout(wrapped)).isTrue();
+        assertThat(HttpGoClient.isTimeout(new RuntimeException("other"))).isFalse();
+    }
+
+    @Test
     void contentIssuesNullCoalescesToEmptyArray() throws Exception {
         server.enqueue(new MockResponse()
                 .setResponseCode(200)

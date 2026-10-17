@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFStyles;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,11 +32,82 @@ class DocxExportServiceTest {
     }
 
     @Test
+    void templateStylesExist() throws Exception {
+        try (XWPFDocument doc = new XWPFDocument(
+                new ClassPathResource("templates/program-template.docx").getInputStream())) {
+            XWPFStyles styles = doc.getStyles();
+            assertThat(styles).isNotNull();
+            assertThat(styles.styleExist("Heading1")).isTrue();
+            assertThat(styles.styleExist("Heading2")).isTrue();
+            assertThat(styles.styleExist("Title")).isTrue();
+            assertThat(styles.styleExist("Normal")).isTrue();
+            assertThat(styles.styleExist("TableGrid")).isTrue();
+        }
+    }
+
+    @Test
     void exportContainsHoursTableWithMatchingTotals() throws Exception {
         ObjectNode program = sampleProgram(72);
-        ProgramStore.ProgramSnapshot snap = new ProgramStore.ProgramSnapshot(
+        byte[] bytes = exportService.export(snapshot(program, ProgramStatus.VALIDATED));
+        assertThat(bytes.length).isGreaterThan(1000);
+
+        try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes))) {
+            assertThat(doc.getTables()).isNotEmpty();
+            XWPFTable table = doc.getTables().get(0);
+            assertThat(table.getStyleID()).isEqualTo("TableGrid");
+            XWPFTableRow last = table.getRow(table.getNumberOfRows() - 1);
+            assertThat(last.getCell(0).getText()).containsIgnoringCase("ИТОГО");
+            double totalCell = Double.parseDouble(last.getCell(7).getText().replace(',', '.'));
+            assertThat(totalCell).isEqualTo(72.0);
+
+            double summed = 0;
+            for (int i = 1; i < table.getNumberOfRows() - 1; i++) {
+                String label = table.getRow(i).getCell(0).getText();
+                if (!label.startsWith("  ")) {
+                    summed += Double.parseDouble(table.getRow(i).getCell(7).getText().replace(',', '.'));
+                }
+            }
+            assertThat(summed).isEqualTo(72.0);
+
+            String allText = doc.getParagraphs().stream()
+                    .map(XWPFParagraph::getText)
+                    .collect(Collectors.joining("\n"));
+            assertThat(allText).doesNotContain("ЧЕРНОВИК");
+        }
+    }
+
+    @Test
+    void draftExportAddsChernovikWatermark() throws Exception {
+        ObjectNode program = sampleProgram(16);
+        byte[] bytes = exportService.export(snapshot(program, ProgramStatus.CONTENT_READY));
+        try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes))) {
+            String allText = doc.getParagraphs().stream()
+                    .map(XWPFParagraph::getText)
+                    .collect(Collectors.joining("\n"));
+            assertThat(allText).contains("ЧЕРНОВИК");
+        }
+    }
+
+    @Test
+    void multilineLlmTextBecomesSeparateParagraphs() throws Exception {
+        ObjectNode program = sampleProgram(16);
+        program.withObject("/goal").put("text", "Первая строка цели.\nВторая строка цели.");
+        byte[] bytes = exportService.export(snapshot(program, ProgramStatus.VALIDATED));
+        try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes))) {
+            List<String> texts = doc.getParagraphs().stream()
+                    .map(XWPFParagraph::getText)
+                    .toList();
+            assertThat(texts).anyMatch(t -> t.contains("Первая строка цели."));
+            assertThat(texts).anyMatch(t -> t.equals("Вторая строка цели."));
+            assertThat(texts.stream().noneMatch(t -> t.contains("Первая строка цели.\nВторая")))
+                    .isTrue();
+        }
+    }
+
+    private ProgramStore.ProgramSnapshot snapshot(ObjectNode program, ProgramStatus status) {
+        return new ProgramStore.ProgramSnapshot(
                 UUID.fromString(program.path("id").asText()),
-                ProgramStatus.VALIDATED,
+                status,
                 false,
                 null,
                 null,
@@ -47,29 +121,6 @@ class DocxExportServiceTest {
                 Instant.now(),
                 Instant.now()
         );
-
-        byte[] bytes = exportService.export(snap);
-        assertThat(bytes.length).isGreaterThan(1000);
-
-        try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes))) {
-            assertThat(doc.getTables()).isNotEmpty();
-            XWPFTable table = doc.getTables().get(0);
-            XWPFTableRow last = table.getRow(table.getNumberOfRows() - 1);
-            assertThat(last.getCell(0).getText()).containsIgnoringCase("ИТОГО");
-            double totalCell = Double.parseDouble(last.getCell(7).getText().replace(',', '.'));
-            assertThat(totalCell).isEqualTo(72.0);
-
-            double summed = 0;
-            // rows: header + modules/topics + FA + ИТОГО — sum module/topic/FA total column excluding header/итог
-            for (int i = 1; i < table.getNumberOfRows() - 1; i++) {
-                String label = table.getRow(i).getCell(0).getText();
-                // count module rows and FA only (not indented topics) to avoid double-counting
-                if (!label.startsWith("  ")) {
-                    summed += Double.parseDouble(table.getRow(i).getCell(7).getText().replace(',', '.'));
-                }
-            }
-            assertThat(summed).isEqualTo(72.0);
-        }
     }
 
     private ObjectNode sampleProgram(double hours) throws Exception {
@@ -78,12 +129,10 @@ class DocxExportServiceTest {
         program.put("id", "11111111-1111-4111-8111-111111111111");
         program.put("programType", "DPP_PK");
         program.withObject("/header").put("totalHours", hours);
-        // Use mock allocator logic via consistent totals
         MockHours.allocate(program, hours);
         return program;
     }
 
-    /** Minimal hour fill for the export test without depending on MockGoClient internals. */
     static final class MockHours {
         static void allocate(ObjectNode program, double totalHours) {
             var mods = program.withObject("/curriculum").withArray("modules");
@@ -111,7 +160,6 @@ class DocxExportServiceTest {
                 total += m.path("hours").path("total").asDouble();
             }
             total += fa;
-            contact += 0;
             totals.put("lecture", lecture);
             totals.put("practice", practice);
             totals.put("lab", 0);
