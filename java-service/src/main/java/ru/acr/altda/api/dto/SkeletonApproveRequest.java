@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 
 public record SkeletonApproveRequest(
         @NotBlank String variantKey,
-        String comment
+        String comment,
+        Long version
 ) {
 }

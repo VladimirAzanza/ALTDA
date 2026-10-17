@@ -16,10 +16,12 @@ public class AsyncConfig implements AsyncConfigurer {
     @Bean(name = PROGRAM_EXECUTOR)
     public ThreadPoolTaskExecutor programTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(4);
+        // Fixed pool: core == max (review); virtual threads also enabled in application.yml
+        executor.setCorePoolSize(16);
         executor.setMaxPoolSize(16);
-        executor.setQueueCapacity(200);
+        executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("altda-async-");
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         return executor;
     }

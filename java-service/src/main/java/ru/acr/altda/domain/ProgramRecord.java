@@ -10,8 +10,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * In-memory заявка aggregate: schema program JSON plus orchestration metadata.
- * {@link #version} supports optimistic locking on concurrent updates.
+ * In-memory заявка aggregate. Version is bumped exactly once per
+ * {@link ru.acr.altda.store.ProgramStore#update} — setters do not increment it.
  */
 public class ProgramRecord {
 
@@ -26,6 +26,7 @@ public class ProgramRecord {
     private final List<HistoryEntry> history = new ArrayList<>();
     private volatile boolean busy;
     private volatile String error;
+    private volatile PipelineStep failedFrom;
     private final Instant createdAt;
     private volatile Instant updatedAt;
 
@@ -42,14 +43,14 @@ public class ProgramRecord {
         return id;
     }
 
-    /** Monotonic version bumped on every successful mutation of this record. */
     public long getVersion() {
         return version.get();
     }
 
-    public long bumpVersion() {
+    /** Called once by {@code ProgramStore.update} after the mutator returns. */
+    public long bumpVersionOnce() {
         long next = version.incrementAndGet();
-        touch();
+        this.updatedAt = Instant.now();
         return next;
     }
 
@@ -59,10 +60,9 @@ public class ProgramRecord {
 
     public void setStatus(ProgramStatus status) {
         this.status = status;
-        if (status.isSchemaStatus()) {
+        if (status != null && status.isSchemaStatus() && program != null) {
             program.put("status", status.jsonValue());
         }
-        bumpVersion();
     }
 
     public ObjectNode getProgram() {
@@ -71,7 +71,6 @@ public class ProgramRecord {
 
     public void setProgram(ObjectNode program) {
         this.program = program;
-        bumpVersion();
     }
 
     public JsonNode getSkeletonVariants() {
@@ -80,7 +79,6 @@ public class ProgramRecord {
 
     public void setSkeletonVariants(JsonNode skeletonVariants) {
         this.skeletonVariants = skeletonVariants;
-        bumpVersion();
     }
 
     public String getSelectedVariantKey() {
@@ -89,7 +87,6 @@ public class ProgramRecord {
 
     public void setSelectedVariantKey(String selectedVariantKey) {
         this.selectedVariantKey = selectedVariantKey;
-        bumpVersion();
     }
 
     public JsonNode getValidationReport() {
@@ -98,7 +95,6 @@ public class ProgramRecord {
 
     public void setValidationReport(JsonNode validationReport) {
         this.validationReport = validationReport;
-        bumpVersion();
     }
 
     public JsonNode getIssues() {
@@ -107,7 +103,6 @@ public class ProgramRecord {
 
     public void setIssues(JsonNode issues) {
         this.issues = issues;
-        bumpVersion();
     }
 
     public List<HistoryEntry> getHistory() {
@@ -120,7 +115,6 @@ public class ProgramRecord {
         synchronized (history) {
             history.add(entry);
         }
-        bumpVersion();
     }
 
     public boolean isBusy() {
@@ -129,7 +123,6 @@ public class ProgramRecord {
 
     public void setBusy(boolean busy) {
         this.busy = busy;
-        bumpVersion();
     }
 
     public String getError() {
@@ -138,19 +131,26 @@ public class ProgramRecord {
 
     public void setError(String error) {
         this.error = error;
-        bumpVersion();
     }
 
-    public void markFailed(String message) {
+    public PipelineStep getFailedFrom() {
+        return failedFrom;
+    }
+
+    public void setFailedFrom(PipelineStep failedFrom) {
+        this.failedFrom = failedFrom;
+    }
+
+    public void markFailed(String message, PipelineStep step) {
         this.error = message;
+        this.failedFrom = step;
         this.busy = false;
         this.status = ProgramStatus.FAILED;
-        bumpVersion();
     }
 
     public void clearError() {
         this.error = null;
-        bumpVersion();
+        this.failedFrom = null;
     }
 
     public Instant getCreatedAt() {
@@ -159,9 +159,5 @@ public class ProgramRecord {
 
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    private void touch() {
-        this.updatedAt = Instant.now();
     }
 }

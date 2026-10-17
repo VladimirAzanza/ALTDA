@@ -7,14 +7,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * UI-friendly poll payload: orchestration fields + embedded schema program.
- */
 public record ProgramResponse(
         UUID id,
         String status,
         boolean busy,
         String error,
+        String failedFrom,
         long version,
         String selectedVariantKey,
         JsonNode skeletonVariants,

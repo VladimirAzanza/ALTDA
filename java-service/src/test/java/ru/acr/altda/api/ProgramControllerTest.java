@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -97,6 +98,45 @@ class ProgramControllerTest {
     }
 
     @Test
+    void approveWithStaleIfMatchReturns409() throws Exception {
+        MvcResult gen = mockMvc.perform(post("/api/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"request":"ДПП ПК тест, 16 ч","answers":{"entryLevel":"x"}}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode body = objectMapper.readTree(gen.getResponse().getContentAsString());
+        String id = body.path("id").asText();
+
+        // Force skeleton_proposed-like approve path isn't available after generate;
+        // use content approve with wrong version instead.
+        mockMvc.perform(post("/programs/" + id + "/content/approve")
+                        .header("If-Match", "1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"comment\":\"ok\",\"version\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("version_conflict"));
+    }
+
+    @Test
+    void exportDocxReturnsWordFile() throws Exception {
+        MvcResult gen = mockMvc.perform(post("/api/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"request":"ДПП ПК тест, 16 ч","answers":{"entryLevel":"x"}}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        String id = objectMapper.readTree(gen.getResponse().getContentAsString()).path("id").asText();
+
+        mockMvc.perform(get("/programs/" + id + "/export.docx"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.containsString(".docx")))
+                .andExpect(result -> assertThat(result.getResponse().getContentAsByteArray().length).isGreaterThan(500));
+    }
+
+    @Test
     void mutationWhileBusyReturns409() throws Exception {
         MvcResult created = mockMvc.perform(post("/programs")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -105,15 +145,10 @@ class ProgramControllerTest {
                 .andReturn();
         String id = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
 
-        // Immediately try clarifications while async parse may still be busy
         mockMvc.perform(post("/programs/" + id + "/clarifications")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\":[{\"param\":\"entryLevel\",\"answer\":\"x\"}]}"))
-                .andExpect(result -> {
-                    int code = result.getResponse().getStatus();
-                    // Either 409 (busy) or 409 illegal_state / or 200 if already clarifying — all acceptable races
-                    assertThat(code).isIn(200, 409);
-                });
+                .andExpect(result -> assertThat(result.getResponse().getStatus()).isIn(200, 409));
     }
 
     private JsonNode waitUntil(String id, java.util.function.Predicate<JsonNode> predicate) throws Exception {

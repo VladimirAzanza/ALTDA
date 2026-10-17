@@ -1,7 +1,6 @@
 package ru.acr.altda.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,7 +8,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import ru.acr.altda.config.AsyncConfig;
 import ru.acr.altda.domain.HistoryEntry;
-import ru.acr.altda.domain.ProgramRecord;
+import ru.acr.altda.domain.PipelineStep;
 import ru.acr.altda.domain.ProgramStatus;
 import ru.acr.altda.domain.ProgramStatusMachine;
 import ru.acr.altda.go.GoClient;
@@ -25,30 +24,30 @@ public class ProgramAsyncJobs {
 
     private final ProgramStore store;
     private final GoClient goClient;
-    private final ObjectMapper objectMapper;
     private final ProgramServiceSupport support;
+    private final ProgramJsonHelpers jsonHelpers;
 
     public ProgramAsyncJobs(
             ProgramStore store,
             GoClient goClient,
-            ObjectMapper objectMapper,
-            ProgramServiceSupport support
+            ProgramServiceSupport support,
+            ProgramJsonHelpers jsonHelpers
     ) {
         this.store = store;
         this.goClient = goClient;
-        this.objectMapper = objectMapper;
         this.support = support;
+        this.jsonHelpers = jsonHelpers;
     }
 
     @Async(AsyncConfig.PROGRAM_EXECUTOR)
     public void runParseAndMaybeSkeleton(UUID id) {
         try {
             store.update(id, r -> r.setBusy(true));
-            ProgramRecord record = store.require(id);
-            String rawText = record.getProgram().path("request").path("rawText").asText();
-            JsonNode clarifications = record.getProgram().path("request").path("clarifications");
+            ObjectNode programCopy = store.programCopy(id);
+            String rawText = programCopy.path("request").path("rawText").asText();
+            JsonNode clarifications = programCopy.path("request").path("clarifications");
 
-            GoClient.ParseResult parsed = goClient.parse(rawText, clarifications);
+            GoClient.ParseResult parsed = goClient.parse(rawText, clarifications.deepCopy());
             store.update(id, r -> {
                 support.applyParseResult(r, parsed);
                 boolean missing = parsed.missing() != null
@@ -67,27 +66,43 @@ public class ProgramAsyncJobs {
                 }
             });
 
-            record = store.require(id);
-            if (record.getStatus() == ProgramStatus.CLARIFYING) {
+            if (store.snapshot(id).status() == ProgramStatus.CLARIFYING) {
                 return;
             }
 
             generateSkeletonInternal(id);
         } catch (Exception ex) {
             log.error("Parse/skeleton failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage()));
+            PipelineStep step = ex.getMessage() != null && ex.getMessage().contains("skeleton")
+                    ? PipelineStep.SKELETON
+                    : PipelineStep.PARSE;
+            store.update(id, r -> r.markFailed(ex.getMessage(), step));
+        }
+    }
+
+    @Async(AsyncConfig.PROGRAM_EXECUTOR)
+    public void runSkeletonOnly(UUID id) {
+        try {
+            store.update(id, r -> {
+                r.setBusy(true);
+                r.clearError();
+            });
+            generateSkeletonInternal(id);
+        } catch (Exception ex) {
+            log.error("Skeleton failed for {}", id, ex);
+            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.SKELETON));
         }
     }
 
     @Async(AsyncConfig.PROGRAM_EXECUTOR)
     public void runRegenerateSkeleton(UUID id, String comment) {
         try {
-            ProgramRecord record = store.require(id);
+            ObjectNode programCopy = store.programCopy(id);
             GoClient.SkeletonRegenerateResult result = goClient.regenerateSkeleton(
-                    record.getProgram(), comment, null, true);
+                    programCopy, comment, null, true);
             store.update(id, r -> {
                 if (result.variants() != null && !result.variants().isNull()) {
-                    r.setSkeletonVariants(wrapVariants(result.variants()));
+                    r.setSkeletonVariants(jsonHelpers.wrapVariants(result.variants()));
                 }
                 if (result.program() != null) {
                     ObjectNode prog = result.program();
@@ -105,7 +120,7 @@ public class ProgramAsyncJobs {
             });
         } catch (Exception ex) {
             log.error("Regenerate skeleton failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage()));
+            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.REGENERATE));
         }
     }
 
@@ -114,17 +129,21 @@ public class ProgramAsyncJobs {
         try {
             store.update(id, r -> {
                 ProgramStatus from = r.getStatus();
-                if (from == ProgramStatus.SKELETON_APPROVED || from == ProgramStatus.CONTENT_GENERATING) {
-                    if (from == ProgramStatus.SKELETON_APPROVED) {
-                        ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
+                if (from == ProgramStatus.SKELETON_APPROVED || from == ProgramStatus.CONTENT_GENERATING
+                        || from == ProgramStatus.FAILED) {
+                    if (from == ProgramStatus.SKELETON_APPROVED || from == ProgramStatus.FAILED) {
+                        if (from == ProgramStatus.SKELETON_APPROVED) {
+                            ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
+                        }
+                        r.setStatus(ProgramStatus.CONTENT_GENERATING);
                     }
-                    r.setStatus(ProgramStatus.CONTENT_GENERATING);
                 }
                 r.setBusy(true);
+                r.clearError();
             });
 
-            ProgramRecord record = store.require(id);
-            GoClient.ContentGenerateResult content = goClient.generateContent(record.getProgram(), null);
+            ObjectNode programCopy = store.programCopy(id);
+            GoClient.ContentGenerateResult content = goClient.generateContent(programCopy, null);
             store.update(id, r -> {
                 ObjectNode prog = content.program();
                 prog.put("id", id.toString());
@@ -137,8 +156,8 @@ public class ProgramAsyncJobs {
                 r.setStatus(ProgramStatus.CONTENT_READY);
             });
 
-            record = store.require(id);
-            GoClient.ValidateResult validation = goClient.validate(record.getProgram());
+            ObjectNode forValidate = store.programCopy(id);
+            GoClient.ValidateResult validation = goClient.validate(forValidate);
             store.update(id, r -> {
                 r.setValidationReport(validation.validationReport());
                 r.setIssues(validation.issues());
@@ -156,15 +175,41 @@ public class ProgramAsyncJobs {
             });
         } catch (Exception ex) {
             log.error("Content/validate failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage()));
+            PipelineStep step = store.snapshot(id).status() == ProgramStatus.CONTENT_READY
+                    ? PipelineStep.VALIDATE
+                    : PipelineStep.CONTENT;
+            store.update(id, r -> r.markFailed(ex.getMessage(), step));
+        }
+    }
+
+    @Async(AsyncConfig.PROGRAM_EXECUTOR)
+    public void runValidateOnly(UUID id) {
+        try {
+            store.update(id, r -> r.setBusy(true));
+            ObjectNode forValidate = store.programCopy(id);
+            GoClient.ValidateResult validation = goClient.validate(forValidate);
+            store.update(id, r -> {
+                r.setValidationReport(validation.validationReport());
+                r.setIssues(validation.issues());
+                ObjectNode prog = r.getProgram();
+                prog.set("validationReport", validation.validationReport());
+                prog.put("status", ProgramStatus.VALIDATED.jsonValue());
+                r.setProgram(prog);
+                r.setStatus(ProgramStatus.VALIDATED);
+                r.setBusy(false);
+                r.clearError();
+            });
+        } catch (Exception ex) {
+            log.error("Validate failed for {}", id, ex);
+            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.VALIDATE));
         }
     }
 
     private void generateSkeletonInternal(UUID id) {
-        ProgramRecord record = store.require(id);
-        GoClient.SkeletonGenerateResult skeleton = goClient.generateSkeleton(record.getProgram());
+        ObjectNode programCopy = store.programCopy(id);
+        GoClient.SkeletonGenerateResult skeleton = goClient.generateSkeleton(programCopy);
         store.update(id, r -> {
-            r.setSkeletonVariants(wrapVariants(skeleton.variants()));
+            r.setSkeletonVariants(jsonHelpers.wrapVariants(skeleton.variants()));
             ProgramStatus from = r.getStatus();
             ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_PROPOSED);
             r.setStatus(ProgramStatus.SKELETON_PROPOSED);
@@ -173,14 +218,5 @@ public class ProgramAsyncJobs {
             r.addHistory(new HistoryEntry(
                     Instant.now(), "skeleton_proposed", from, ProgramStatus.SKELETON_PROPOSED, null, null));
         });
-    }
-
-    private JsonNode wrapVariants(JsonNode variants) {
-        if (variants != null && variants.isObject() && variants.has("variants")) {
-            return variants;
-        }
-        ObjectNode wrapper = objectMapper.createObjectNode();
-        wrapper.set("variants", variants == null ? objectMapper.createArrayNode() : variants);
-        return wrapper;
     }
 }

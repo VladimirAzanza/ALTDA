@@ -320,9 +320,11 @@ Port **8000**. UI polls Java; Go is never called from the browser.
 | `GET` | `/health` | Java liveness (+ which Go client) |
 | `POST` | `/api/generate` | Sync test pipeline, auto-approve |
 | `POST` | `/programs` … | Interactive заявка lifecycle (see java-service README) |
-| `GET` | `/programs/{id}/export/docx` | Phase 3 placeholder (501) |
+| `GET` | `/programs/{id}/export.docx` | Phase 3 DOCX export (Apache POI from styled template) |
 
-Java maps Go `node_locked` → HTTP 409 for the UI. Go timeouts / LLM errors → Java `status=failed` + `error` (orchestration only).
+Mutating approve/return/lock/allocate/regenerate endpoints accept optimistic concurrency via `If-Match` (etag or bare version) and/or body `version`; mismatch → HTTP **409** `version_conflict`. `GET /programs/{id}` returns a deep-copied snapshot (`failedFrom` when status is Java-only `failed`).
+
+Java maps Go `node_locked` → HTTP 409 for the UI. Go timeouts / LLM errors → Java `status=failed` + `error` + `failedFrom` (orchestration only).
 
 ---
 

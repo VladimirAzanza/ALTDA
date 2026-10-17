@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: altda-java-service
+  threads:
+    virtual:
+      enabled: true
   web:
     resources:
       static-locations: classpath:/static/

@@ -19,7 +19,7 @@ check_generate() {
   local tmp
   tmp=$(mktemp)
   local code
-  code=$(curl -sS -o "$tmp" -w "%{http_code}" \
+  code=$(curl -sS --max-time 600 -o "$tmp" -w "%{http_code}" \
     -X POST "$BASE_URL/api/generate" \
     -H "Content-Type: application/json" \
     -d "$payload")

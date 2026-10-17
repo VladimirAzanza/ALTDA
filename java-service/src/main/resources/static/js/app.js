@@ -688,7 +688,7 @@
         <p class="muted">Статус: <strong>${escapeHtml(STATUS_LABELS[s.status] || s.status)}</strong>. JSON доступен сразу; .docx — в фазе 3.</p>
         <div class="row">
           <button type="button" class="btn" id="dl-json">Скачать JSON</button>
-          <button type="button" class="btn btn-secondary" id="dl-docx">Скачать .docx (скоро)</button>
+          <button type="button" class="btn btn-secondary" id="dl-docx">Скачать .docx</button>
         </div>
         <pre class="json">${escapeHtml(JSON.stringify(s.program, null, 2).slice(0, 4000))}${JSON.stringify(s.program).length > 4000 ? "\n…" : ""}</pre>
       </section>
@@ -710,17 +710,10 @@
     }
     const docx = document.getElementById("dl-docx");
     if (docx) {
-      docx.onclick = () => handleAction(async () => {
-        try {
-          await api(`/programs/${state.currentId}/export/docx`);
-        } catch (err) {
-          if (err.status === 501) {
-            toast(err.message || "DOCX будет в фазе 3", "err");
-            return;
-          }
-          throw err;
-        }
-      });
+      docx.onclick = () => {
+        window.location.href = `/programs/${state.currentId}/export.docx`;
+        toast("Скачивание .docx…", "ok");
+      };
     }
   }
 

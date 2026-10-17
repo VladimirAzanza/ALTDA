@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 import ru.acr.altda.api.ConflictException;
 import ru.acr.altda.api.dto.ClarificationAnswerRequest;
@@ -16,7 +17,7 @@ import ru.acr.altda.api.dto.RegenerateRequest;
 import ru.acr.altda.api.dto.ReturnRequest;
 import ru.acr.altda.api.dto.SkeletonApproveRequest;
 import ru.acr.altda.domain.HistoryEntry;
-import ru.acr.altda.domain.ProgramRecord;
+import ru.acr.altda.domain.PipelineStep;
 import ru.acr.altda.domain.ProgramStatus;
 import ru.acr.altda.domain.ProgramStatusMachine;
 import ru.acr.altda.go.GoClient;
@@ -37,6 +38,7 @@ public class ProgramService {
     private final ProgramAsyncJobs asyncJobs;
     private final SkeletonMaterializer skeletonMaterializer;
     private final ProgramServiceSupport support;
+    private final ProgramJsonHelpers jsonHelpers;
 
     public ProgramService(
             ProgramStore store,
@@ -44,7 +46,8 @@ public class ProgramService {
             ObjectMapper objectMapper,
             ProgramAsyncJobs asyncJobs,
             SkeletonMaterializer skeletonMaterializer,
-            ProgramServiceSupport support
+            ProgramServiceSupport support,
+            ProgramJsonHelpers jsonHelpers
     ) {
         this.store = store;
         this.goClient = goClient;
@@ -52,9 +55,10 @@ public class ProgramService {
         this.asyncJobs = asyncJobs;
         this.skeletonMaterializer = skeletonMaterializer;
         this.support = support;
+        this.jsonHelpers = jsonHelpers;
     }
 
-    public ProgramRecord create(CreateProgramRequest request) {
+    public ProgramStore.ProgramSnapshot create(CreateProgramRequest request) {
         UUID id = UUID.randomUUID();
         ObjectNode program = objectMapper.createObjectNode();
         program.put("schemaVersion", "1.1");
@@ -67,30 +71,29 @@ public class ProgramService {
         req.putArray("clarifications");
         req.putArray("gapsReport");
 
-        ProgramRecord record = new ProgramRecord(id, program);
-        store.saveNew(record);
-        asyncJobs.runParseAndMaybeSkeleton(id);
-        return store.require(id);
+        store.saveNew(new ru.acr.altda.domain.ProgramRecord(id, program));
+        dispatchAsync(id, PipelineStep.PARSE, () -> asyncJobs.runParseAndMaybeSkeleton(id));
+        return store.snapshot(id);
     }
 
-    public List<ProgramRecord> list() {
-        return store.findAll();
+    public List<ProgramStore.ProgramSnapshot> list() {
+        return store.snapshotAll();
     }
 
-    public ProgramRecord get(UUID id) {
-        return store.require(id);
+    public ProgramStore.ProgramSnapshot get(UUID id) {
+        return store.snapshot(id);
     }
 
-    public ProgramRecord answerClarifications(UUID id, ClarificationAnswerRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        if (record.getStatus() != ProgramStatus.CLARIFYING
-                && record.getStatus() != ProgramStatus.FAILED) {
-            throw new IllegalStateException(
-                    "Clarifications only accepted in clarifying/failed, was " + record.getStatus().jsonValue());
-        }
-
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot answerClarifications(
+            UUID id,
+            ClarificationAnswerRequest body,
+            Long expectedVersion
+    ) {
+        store.updateEditable(id, expectedVersion, r -> {
+            if (r.getStatus() != ProgramStatus.CLARIFYING && r.getStatus() != ProgramStatus.FAILED) {
+                throw new IllegalStateException(
+                        "Clarifications only accepted in clarifying/failed, was " + r.getStatus().jsonValue());
+            }
             ObjectNode request = r.getProgram().withObject("/request");
             ArrayNode clarifications = request.withArray("clarifications");
             for (ClarificationAnswerRequest.Answer answer : body.answers()) {
@@ -114,31 +117,30 @@ public class ProgramService {
             r.addHistory(new HistoryEntry(
                     Instant.now(), "clarifications_submitted", r.getStatus(), r.getStatus(), null, null));
         });
-
-        asyncJobs.runParseAndMaybeSkeleton(id);
-        return store.require(id);
+        retryOr(id, PipelineStep.PARSE);
+        return store.snapshot(id);
     }
 
-    public ProgramRecord approveSkeleton(UUID id, SkeletonApproveRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        if (record.getStatus() != ProgramStatus.SKELETON_PROPOSED) {
-            throw new IllegalStateException(
-                    "Skeleton approve requires skeleton_proposed, was " + record.getStatus().jsonValue());
-        }
-        if (record.getSkeletonVariants() == null) {
-            throw new IllegalStateException("No skeleton variants available");
-        }
-
-        JsonNode chosen = findVariant(record.getSkeletonVariants(), body.variantKey());
-        if (chosen == null) {
-            throw new IllegalArgumentException("Unknown variantKey: " + body.variantKey());
-        }
-
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot approveSkeleton(
+            UUID id,
+            SkeletonApproveRequest body,
+            Long expectedVersion
+    ) {
+        store.updateEditable(id, expectedVersion, r -> {
+            if (r.getStatus() != ProgramStatus.SKELETON_PROPOSED) {
+                throw new IllegalStateException(
+                        "Skeleton approve requires skeleton_proposed, was " + r.getStatus().jsonValue());
+            }
+            if (r.getSkeletonVariants() == null) {
+                throw new IllegalStateException("No skeleton variants available");
+            }
+            JsonNode chosen = ProgramJsonHelpers.findVariant(r.getSkeletonVariants(), body.variantKey());
+            if (chosen == null) {
+                throw new IllegalArgumentException("Unknown variantKey: " + body.variantKey());
+            }
             ProgramStatus from = r.getStatus();
             ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_APPROVED);
-            ObjectNode materialized = skeletonMaterializer.mergeVariant(r.getProgram(), chosen);
+            ObjectNode materialized = skeletonMaterializer.mergeVariant(r.getProgram().deepCopy(), chosen);
             materialized.put("status", ProgramStatus.SKELETON_APPROVED.jsonValue());
             r.setProgram(materialized);
             r.setSelectedVariantKey(body.variantKey());
@@ -150,23 +152,20 @@ public class ProgramService {
                     body.comment(), body.variantKey()));
             r.setBusy(true);
         });
-
-        asyncJobs.runContentAndValidate(id);
-        return store.require(id);
+        dispatchAsync(id, PipelineStep.CONTENT, () -> asyncJobs.runContentAndValidate(id));
+        return store.snapshot(id);
     }
 
-    public ProgramRecord returnSkeleton(UUID id, ReturnRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        if (record.getStatus() != ProgramStatus.SKELETON_PROPOSED
-                && record.getStatus() != ProgramStatus.FAILED) {
-            throw new IllegalStateException(
-                    "Skeleton return requires skeleton_proposed/failed, was " + record.getStatus().jsonValue());
-        }
-
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot returnSkeleton(UUID id, ReturnRequest body, Long expectedVersion) {
+        store.updateEditable(id, expectedVersion, r -> {
+            if (r.getStatus() != ProgramStatus.SKELETON_PROPOSED && r.getStatus() != ProgramStatus.FAILED) {
+                throw new IllegalStateException(
+                        "Skeleton return requires skeleton_proposed/failed, was " + r.getStatus().jsonValue());
+            }
             ProgramStatus from = r.getStatus();
-            ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_PROPOSED);
+            if (from != ProgramStatus.FAILED) {
+                ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_PROPOSED);
+            }
             appendApproval(r.getProgram(), "skeleton", false, body.comment());
             r.clearError();
             r.setStatus(ProgramStatus.SKELETON_PROPOSED);
@@ -175,25 +174,24 @@ public class ProgramService {
                     Instant.now(), "skeleton_returned", from, ProgramStatus.SKELETON_PROPOSED,
                     body.comment(), null));
         });
-
-        asyncJobs.runRegenerateSkeleton(id, body.comment());
-        return store.require(id);
+        String comment = body.comment();
+        retryOr(id, PipelineStep.REGENERATE, () -> asyncJobs.runRegenerateSkeleton(id, comment));
+        return store.snapshot(id);
     }
 
-    public ProgramRecord approveContent(UUID id, ContentApproveRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        if (record.getStatus() != ProgramStatus.VALIDATED
-                && record.getStatus() != ProgramStatus.CONTENT_READY) {
-            throw new IllegalStateException(
-                    "Content approve requires validated/content_ready, was " + record.getStatus().jsonValue());
-        }
-
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot approveContent(
+            UUID id,
+            ContentApproveRequest body,
+            Long expectedVersion
+    ) {
+        store.updateEditable(id, expectedVersion, r -> {
+            if (r.getStatus() != ProgramStatus.VALIDATED && r.getStatus() != ProgramStatus.CONTENT_READY) {
+                throw new IllegalStateException(
+                        "Content approve requires validated/content_ready, was " + r.getStatus().jsonValue());
+            }
             ProgramStatus from = r.getStatus();
             appendApproval(r.getProgram(), "content", true, body == null ? null : body.comment());
             if (from == ProgramStatus.CONTENT_READY) {
-                // Allow approve before validate finishes in edge cases; prefer validated.
                 ProgramStatusMachine.assertTransition(from, ProgramStatus.VALIDATED);
                 r.setStatus(ProgramStatus.VALIDATED);
             }
@@ -201,22 +199,21 @@ public class ProgramService {
                     Instant.now(), "content_approved", from, r.getStatus(),
                     body == null ? null : body.comment(), null));
         });
-        return store.require(id);
+        return store.snapshot(id);
     }
 
-    public ProgramRecord returnContent(UUID id, ReturnRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        if (record.getStatus() != ProgramStatus.VALIDATED
-                && record.getStatus() != ProgramStatus.CONTENT_READY
-                && record.getStatus() != ProgramStatus.FAILED) {
-            throw new IllegalStateException(
-                    "Content return not allowed from " + record.getStatus().jsonValue());
-        }
-
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot returnContent(UUID id, ReturnRequest body, Long expectedVersion) {
+        store.updateEditable(id, expectedVersion, r -> {
+            if (r.getStatus() != ProgramStatus.VALIDATED
+                    && r.getStatus() != ProgramStatus.CONTENT_READY
+                    && r.getStatus() != ProgramStatus.FAILED) {
+                throw new IllegalStateException(
+                        "Content return not allowed from " + r.getStatus().jsonValue());
+            }
             ProgramStatus from = r.getStatus();
-            ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
+            if (from != ProgramStatus.FAILED) {
+                ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
+            }
             appendApproval(r.getProgram(), "content", false, body.comment());
             r.clearError();
             r.setStatus(ProgramStatus.CONTENT_GENERATING);
@@ -225,30 +222,24 @@ public class ProgramService {
                     Instant.now(), "content_returned", from, ProgramStatus.CONTENT_GENERATING,
                     body.comment(), null));
         });
-
-        asyncJobs.runContentAndValidate(id);
-        return store.require(id);
+        retryOr(id, PipelineStep.CONTENT);
+        return store.snapshot(id);
     }
 
-    /**
-     * Point regenerate: skeleton return or content section regenerate via Go.
-     * Locked nodeIds with respectLocks yield 409 {@code node_locked}.
-     */
-    public ProgramRecord regenerate(UUID id, RegenerateRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
+    public ProgramStore.ProgramSnapshot regenerate(UUID id, RegenerateRequest body, Long expectedVersion) {
         String scope = body.scope() == null ? "content" : body.scope();
         String comment = body.comment() == null ? "точечная перегенерация" : body.comment();
 
         if ("skeleton".equals(scope)) {
             ArrayNode nodeIds = toArrayNode(body.nodeIds());
+            ObjectNode programCopy = store.programCopy(id);
             try {
                 GoClient.SkeletonRegenerateResult result =
-                        goClient.regenerateSkeleton(record.getProgram(), comment, nodeIds, true);
-                store.update(id, r -> {
+                        goClient.regenerateSkeleton(programCopy, comment, nodeIds, true);
+                store.updateEditable(id, expectedVersion, r -> {
                     ProgramStatus from = r.getStatus();
                     if (result.variants() != null && !result.variants().isNull()) {
-                        r.setSkeletonVariants(wrapVariants(result.variants()));
+                        r.setSkeletonVariants(jsonHelpers.wrapVariants(result.variants()));
                     }
                     if (result.program() != null) {
                         ObjectNode prog = result.program();
@@ -264,7 +255,7 @@ public class ProgramService {
                             Instant.now(), "skeleton_regenerated", from, ProgramStatus.SKELETON_PROPOSED,
                             comment, null));
                 });
-                return store.require(id);
+                return store.snapshot(id);
             } catch (GoClientException ex) {
                 if (ex.isNodeLocked()) {
                     throw new ConflictException(ex.getMessage());
@@ -273,7 +264,7 @@ public class ProgramService {
             }
         }
 
-        store.update(id, r -> {
+        store.updateEditable(id, expectedVersion, r -> {
             ProgramStatus from = r.getStatus();
             if (from != ProgramStatus.CONTENT_GENERATING) {
                 ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
@@ -285,16 +276,14 @@ public class ProgramService {
                     Instant.now(), "content_regenerate", from, ProgramStatus.CONTENT_GENERATING,
                     comment, null));
         });
-        asyncJobs.runContentAndValidate(id);
-        return store.require(id);
+        dispatchAsync(id, PipelineStep.CONTENT, () -> asyncJobs.runContentAndValidate(id));
+        return store.snapshot(id);
     }
 
-    /** Rebalance hours via Go after manual edits (Java never computes hours). */
-    public ProgramRecord allocate(UUID id) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        GoClient.AllocateResult result = goClient.allocate(record.getProgram());
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot allocate(UUID id, Long expectedVersion) {
+        ObjectNode copy = store.programCopy(id);
+        GoClient.AllocateResult result = goClient.allocate(copy);
+        store.updateEditable(id, expectedVersion, r -> {
             ObjectNode prog = result.program();
             prog.put("id", id.toString());
             r.setProgram(prog);
@@ -302,21 +291,11 @@ public class ProgramService {
                     Instant.now(), "hours_reallocated", r.getStatus(), r.getStatus(),
                     "manual edit rebalance", null));
         });
-        return store.require(id);
+        return store.snapshot(id);
     }
 
-    private ArrayNode toArrayNode(java.util.List<String> ids) {
-        ArrayNode arr = objectMapper.createArrayNode();
-        if (ids != null) {
-            ids.forEach(arr::add);
-        }
-        return arr;
-    }
-
-    public ProgramRecord lockNodes(UUID id, LockNodesRequest body) {
-        ProgramRecord record = store.require(id);
-        assertEditable(record);
-        store.update(id, r -> {
+    public ProgramStore.ProgramSnapshot lockNodes(UUID id, LockNodesRequest body, Long expectedVersion) {
+        store.updateEditable(id, expectedVersion, r -> {
             ObjectNode program = r.getProgram();
             for (String nodeId : body.nodeIds()) {
                 applyLock(program, nodeId, body.locked());
@@ -330,29 +309,12 @@ public class ProgramService {
                     String.join(",", body.nodeIds()),
                     null));
         });
-        return store.require(id);
-    }
-
-    private void applyLock(JsonNode node, String nodeId, boolean locked) {
-        if (node == null) {
-            return;
-        }
-        if (node.isObject()) {
-            ObjectNode obj = (ObjectNode) node;
-            if (nodeId.equals(obj.path("id").asText(null))) {
-                ObjectNode meta = obj.withObject("/_meta");
-                meta.put("locked", locked);
-            }
-            obj.fields().forEachRemaining(e -> applyLock(e.getValue(), nodeId, locked));
-        } else if (node.isArray()) {
-            for (JsonNode child : node) {
-                applyLock(child, nodeId, locked);
-            }
-        }
+        return store.snapshot(id);
     }
 
     /**
-     * Synchronous end-to-end pipeline for automated tests: skips human approvals.
+     * Synchronous test-mode pipeline. State updates run under the store lock;
+     * Go calls use deep copies of the program JSON.
      */
     public GenerateResponse generateSync(GenerateRequest request) {
         UUID id = UUID.randomUUID();
@@ -374,121 +336,151 @@ public class ProgramService {
         }
         reqNode.putArray("missing");
         reqNode.putArray("gapsReport");
-
-        ProgramRecord record = new ProgramRecord(id, program);
-        store.saveNew(record);
+        store.saveNew(new ru.acr.altda.domain.ProgramRecord(id, program));
 
         try {
-            GoClient.ParseResult parsed = goClient.parse(
+            ObjectNode copy = store.programCopy(id);
+            GoClient.ParseResult firstParse = goClient.parse(
                     request.request(),
-                    record.getProgram().path("request").path("clarifications"));
-            support.applyParseResult(record, parsed);
+                    copy.path("request").path("clarifications").deepCopy());
+            store.update(id, r -> support.applyParseResult(r, firstParse));
 
-            if (parsed.missing() != null && parsed.missing().isArray() && !parsed.missing().isEmpty()) {
-                // Auto-fill remaining gaps for test mode
-                ArrayNode autoAnswers = objectMapper.createArrayNode();
-                for (JsonNode missing : parsed.missing()) {
-                    ObjectNode a = autoAnswers.addObject();
-                    a.put("param", missing.asText());
-                    a.put("question", "auto");
-                    a.put("answer", "авто-значение для теста");
-                }
-                ObjectNode requestObj = record.getProgram().withObject("/request");
-                ArrayNode existing = requestObj.withArray("clarifications");
-                for (JsonNode a : autoAnswers) {
-                    existing.add(a.deepCopy());
-                }
-                parsed = goClient.parse(request.request(), existing);
-                support.applyParseResult(record, parsed);
+            if (firstParse.missing() != null && firstParse.missing().isArray() && !firstParse.missing().isEmpty()) {
+                store.update(id, r -> {
+                    ObjectNode requestObj = r.getProgram().withObject("/request");
+                    ArrayNode existing = requestObj.withArray("clarifications");
+                    for (JsonNode missing : firstParse.missing()) {
+                        ObjectNode a = existing.addObject();
+                        a.put("param", missing.asText());
+                        a.put("question", "auto");
+                        a.put("answer", "авто-значение для теста");
+                    }
+                });
+                ObjectNode again = store.programCopy(id);
+                GoClient.ParseResult secondParse = goClient.parse(
+                        request.request(), again.path("request").path("clarifications").deepCopy());
+                store.update(id, r -> support.applyParseResult(r, secondParse));
             }
 
-            GoClient.SkeletonGenerateResult skeleton = goClient.generateSkeleton(record.getProgram());
-            record.setSkeletonVariants(wrapVariants(skeleton.variants()));
-            JsonNode firstVariant = firstVariant(skeleton.variants());
+            ObjectNode forSkeleton = store.programCopy(id);
+            GoClient.SkeletonGenerateResult skeleton = goClient.generateSkeleton(forSkeleton);
+            JsonNode firstVariant = ProgramJsonHelpers.firstVariant(skeleton.variants());
             if (firstVariant == null) {
                 throw new IllegalStateException("Go returned no skeleton variants");
             }
             String variantKey = firstVariant.path("key").asText("A");
-            ObjectNode materialized = skeletonMaterializer.mergeVariant(record.getProgram(), firstVariant);
-            materialized.put("status", ProgramStatus.SKELETON_APPROVED.jsonValue());
-            record.setProgram(materialized);
-            record.setSelectedVariantKey(variantKey);
-            record.setStatus(ProgramStatus.SKELETON_APPROVED);
-            appendApproval(record.getProgram(), "skeleton", true, "auto-approve (test mode)");
-            record.addHistory(new HistoryEntry(
-                    Instant.now(), "skeleton_auto_approved", ProgramStatus.SKELETON_PROPOSED,
-                    ProgramStatus.SKELETON_APPROVED, "test mode", variantKey));
+            store.update(id, r -> {
+                r.setSkeletonVariants(jsonHelpers.wrapVariants(skeleton.variants()));
+                ObjectNode materialized = skeletonMaterializer.mergeVariant(r.getProgram().deepCopy(), firstVariant);
+                materialized.put("status", ProgramStatus.SKELETON_APPROVED.jsonValue());
+                r.setProgram(materialized);
+                r.setSelectedVariantKey(variantKey);
+                r.setStatus(ProgramStatus.SKELETON_APPROVED);
+                appendApproval(r.getProgram(), "skeleton", true, "auto-approve (test mode)");
+                r.addHistory(new HistoryEntry(
+                        Instant.now(), "skeleton_auto_approved", ProgramStatus.SKELETON_PROPOSED,
+                        ProgramStatus.SKELETON_APPROVED, "test mode", variantKey));
+                r.setStatus(ProgramStatus.CONTENT_GENERATING);
+            });
 
-            record.setStatus(ProgramStatus.CONTENT_GENERATING);
-            GoClient.ContentGenerateResult content = goClient.generateContent(record.getProgram(), null);
-            ObjectNode contentProgram = content.program();
-            contentProgram.put("id", id.toString());
-            contentProgram.put("status", ProgramStatus.CONTENT_READY.jsonValue());
-            record.setProgram(contentProgram);
-            record.setStatus(ProgramStatus.CONTENT_READY);
-            if (content.issues() != null) {
-                record.setIssues(content.issues());
-            }
-            appendApproval(record.getProgram(), "content", true, "auto-approve (test mode)");
+            ObjectNode forContent = store.programCopy(id);
+            GoClient.ContentGenerateResult content = goClient.generateContent(forContent, null);
+            store.update(id, r -> {
+                ObjectNode contentProgram = content.program();
+                contentProgram.put("id", id.toString());
+                contentProgram.put("status", ProgramStatus.CONTENT_READY.jsonValue());
+                r.setProgram(contentProgram);
+                r.setStatus(ProgramStatus.CONTENT_READY);
+                if (content.issues() != null) {
+                    r.setIssues(content.issues());
+                }
+                appendApproval(r.getProgram(), "content", true, "auto-approve (test mode)");
+            });
 
-            GoClient.ValidateResult validation = goClient.validate(record.getProgram());
-            record.setValidationReport(validation.validationReport());
-            record.setIssues(validation.issues());
-            ObjectNode prog = record.getProgram();
-            prog.set("validationReport", validation.validationReport());
-            prog.put("status", ProgramStatus.VALIDATED.jsonValue());
-            record.setProgram(prog);
-            record.setStatus(ProgramStatus.VALIDATED);
-            record.setBusy(false);
-            record.clearError();
+            ObjectNode forValidate = store.programCopy(id);
+            GoClient.ValidateResult validation = goClient.validate(forValidate);
+            store.update(id, r -> {
+                r.setValidationReport(validation.validationReport());
+                r.setIssues(validation.issues());
+                ObjectNode prog = r.getProgram();
+                prog.set("validationReport", validation.validationReport());
+                prog.put("status", ProgramStatus.VALIDATED.jsonValue());
+                r.setProgram(prog);
+                r.setStatus(ProgramStatus.VALIDATED);
+                r.setBusy(false);
+                r.clearError();
+            });
 
+            ProgramStore.ProgramSnapshot done = store.snapshot(id);
             return new GenerateResponse(
                     id,
-                    record.getStatus().jsonValue(),
-                    record.getProgram(),
-                    record.getIssues(),
-                    record.getValidationReport()
+                    done.status().jsonValue(),
+                    done.program(),
+                    done.issues(),
+                    done.validationReport()
             );
         } catch (Exception ex) {
-            record.markFailed(ex.getMessage());
+            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.CONTENT));
             throw ex;
         }
     }
 
-    private JsonNode wrapVariants(JsonNode variants) {
-        if (variants != null && variants.isObject() && variants.has("variants")) {
-            return variants;
-        }
-        ObjectNode wrapper = objectMapper.createObjectNode();
-        wrapper.set("variants", variants == null ? objectMapper.createArrayNode() : variants);
-        return wrapper;
+    private void retryOr(UUID id, PipelineStep defaultStep) {
+        retryOr(id, defaultStep, null);
     }
 
-    private static JsonNode firstVariant(JsonNode variants) {
-        JsonNode list = variants;
-        if (variants != null && variants.isObject() && variants.has("variants")) {
-            list = variants.get("variants");
+    private void retryOr(UUID id, PipelineStep defaultStep, Runnable regenerateAction) {
+        ProgramStore.ProgramSnapshot snap = store.snapshot(id);
+        PipelineStep step = snap.failedFrom() != null ? snap.failedFrom() : defaultStep;
+        switch (step) {
+            case PARSE -> dispatchAsync(id, PipelineStep.PARSE, () -> asyncJobs.runParseAndMaybeSkeleton(id));
+            case SKELETON -> dispatchAsync(id, PipelineStep.SKELETON, () -> asyncJobs.runSkeletonOnly(id));
+            case REGENERATE -> {
+                if (regenerateAction != null) {
+                    dispatchAsync(id, PipelineStep.REGENERATE, regenerateAction);
+                } else {
+                    dispatchAsync(id, PipelineStep.REGENERATE,
+                            () -> asyncJobs.runRegenerateSkeleton(id, "retry"));
+                }
+            }
+            case CONTENT -> dispatchAsync(id, PipelineStep.CONTENT, () -> asyncJobs.runContentAndValidate(id));
+            case VALIDATE -> dispatchAsync(id, PipelineStep.VALIDATE, () -> asyncJobs.runValidateOnly(id));
+            default -> throw new IllegalStateException("Unhandled pipeline step: " + step);
         }
-        if (list != null && list.isArray() && !list.isEmpty()) {
-            return list.get(0);
-        }
-        return null;
     }
 
-    private static JsonNode findVariant(JsonNode skeletonVariants, String key) {
-        JsonNode list = skeletonVariants;
-        if (skeletonVariants != null && skeletonVariants.isObject() && skeletonVariants.has("variants")) {
-            list = skeletonVariants.get("variants");
+    private void dispatchAsync(UUID id, PipelineStep step, Runnable asyncCall) {
+        try {
+            asyncCall.run();
+        } catch (TaskRejectedException ex) {
+            store.update(id, r -> r.markFailed("Async executor rejected task: " + ex.getMessage(), step));
         }
-        if (list == null || !list.isArray()) {
-            return null;
+    }
+
+    private ArrayNode toArrayNode(List<String> ids) {
+        ArrayNode arr = objectMapper.createArrayNode();
+        if (ids != null) {
+            ids.forEach(arr::add);
         }
-        for (JsonNode v : list) {
-            if (key.equals(v.path("key").asText())) {
-                return v;
+        return arr;
+    }
+
+    private void applyLock(JsonNode node, String nodeId, boolean locked) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            ObjectNode obj = (ObjectNode) node;
+            if (nodeId.equals(obj.path("id").asText(null))) {
+                ObjectNode meta = obj.withObject("/_meta");
+                meta.put("locked", locked);
+            }
+            obj.fields().forEachRemaining(e -> applyLock(e.getValue(), nodeId, locked));
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                applyLock(child, nodeId, locked);
             }
         }
-        return null;
     }
 
     private void appendApproval(ObjectNode program, String stage, boolean approved, String comment) {
@@ -499,14 +491,6 @@ public class ProgramService {
         entry.put("at", Instant.now().toString());
         if (comment != null) {
             entry.put("comment", comment);
-        }
-    }
-
-    private static void assertEditable(ProgramRecord record) {
-        if (ProgramStatusMachine.isMutationBlocked(record.getStatus(), record.isBusy())) {
-            throw new ConflictException(
-                    "Program is busy generating/validating (status="
-                            + record.getStatus().jsonValue() + ", busy=" + record.isBusy() + ")");
         }
     }
 }

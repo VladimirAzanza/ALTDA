@@ -3,47 +3,44 @@ package ru.acr.altda.api;
 import org.springframework.stereotype.Component;
 import ru.acr.altda.api.dto.ProgramResponse;
 import ru.acr.altda.api.dto.ProgramSummaryResponse;
-import ru.acr.altda.domain.ProgramRecord;
+import ru.acr.altda.store.ProgramStore;
 
 @Component
 public class ProgramMapper {
 
-    public ProgramResponse toResponse(ProgramRecord record) {
-        String title = record.getProgram().path("header").path("title").asText(null);
-        if (title == null) {
-            title = record.getProgram().path("request").path("params").path("title").asText(null);
-        }
+    public ProgramResponse toResponse(ProgramStore.ProgramSnapshot s) {
         return new ProgramResponse(
-                record.getId(),
-                record.getStatus().jsonValue(),
-                record.isBusy(),
-                record.getError(),
-                record.getVersion(),
-                record.getSelectedVariantKey(),
-                record.getSkeletonVariants(),
-                record.getValidationReport(),
-                record.getIssues(),
-                record.getProgram(),
-                record.getHistory(),
-                record.getCreatedAt(),
-                record.getUpdatedAt()
+                s.id(),
+                s.status().jsonValue(),
+                s.busy(),
+                s.error(),
+                s.failedFrom() == null ? null : s.failedFrom().jsonValue(),
+                s.version(),
+                s.selectedVariantKey(),
+                s.skeletonVariants(),
+                s.validationReport(),
+                s.issues(),
+                s.program(),
+                s.history(),
+                s.createdAt(),
+                s.updatedAt()
         );
     }
 
-    public ProgramSummaryResponse toSummary(ProgramRecord record) {
-        String title = record.getProgram().path("header").path("title").asText(null);
+    public ProgramSummaryResponse toSummary(ProgramStore.ProgramSnapshot s) {
+        String title = s.program().path("header").path("title").asText(null);
         if (title == null) {
-            title = record.getProgram().path("request").path("params").path("title").asText("(без названия)");
+            title = s.program().path("request").path("params").path("title").asText("(без названия)");
         }
         return new ProgramSummaryResponse(
-                record.getId(),
-                record.getStatus().jsonValue(),
+                s.id(),
+                s.status().jsonValue(),
                 title,
-                record.isBusy(),
-                record.getError(),
-                record.getVersion(),
-                record.getCreatedAt(),
-                record.getUpdatedAt()
+                s.busy(),
+                s.error(),
+                s.version(),
+                s.createdAt(),
+                s.updatedAt()
         );
     }
 }

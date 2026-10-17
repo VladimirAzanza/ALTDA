@@ -1,6 +1,7 @@
 package ru.acr.altda.api.dto;
 
 public record ContentApproveRequest(
-        String comment
+        String comment,
+        Long version
 ) {
 }
