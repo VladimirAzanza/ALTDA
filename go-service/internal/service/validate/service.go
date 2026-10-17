@@ -23,6 +23,13 @@ var statusOrder = []string{
 // of rules is a new function here.
 var ruleSets = []func(*checker, *program.Root){
 	validateHours,
+	validateCalendar,
+	validateCoverage,
+	validateReferences,
+	validateContent,
+	validateTools,
+	validateSources,
+	validateSections,
 }
 
 type service struct {

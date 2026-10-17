@@ -54,16 +54,42 @@ func failed(report *Report, ruleID string) *Check {
 	return nil
 }
 
-func TestSchemaExamplesPassTheHoursRules(t *testing.T) {
-	for _, path := range []string{examplePath, skeletonPath} {
-		report := validate(t, load(t, path))
+func errorsOf(report *Report) []Check {
+	var errs []Check
+	for _, c := range report.Issues() {
+		if c.Severity == SeverityError {
+			errs = append(errs, c)
+		}
+	}
+	return errs
+}
 
-		if len(report.Checks) == 0 {
-			t.Errorf("%s: no checks were run", path)
-		}
-		if issues := report.Issues(); len(issues) != 0 {
-			t.Errorf("%s: unexpected issues: %+v", path, issues)
-		}
+// The reference validator (tools/validate_reference.py) passes example_program
+// with exactly one warning: its third source is unverified. This port must
+// agree with it.
+func TestFullExampleMatchesTheReferenceValidator(t *testing.T) {
+	report := validate(t, load(t, examplePath))
+
+	if errs := errorsOf(report); len(errs) != 0 {
+		t.Errorf("unexpected errors: %+v", errs)
+	}
+	issues := report.Issues()
+	if len(issues) != 1 || issues[0].RuleID != "SOURCE_UNVERIFIED" || issues[0].Severity != SeverityWarning {
+		t.Errorf("issues = %+v, want only the SOURCE_UNVERIFIED warning", issues)
+	}
+	if report.Summary.UnverifiedSources != 1 || report.Summary.Warnings != 1 || report.Summary.Errors != 0 {
+		t.Errorf("summary = %+v", report.Summary)
+	}
+}
+
+func TestSkeletonExamplePassesEveryRule(t *testing.T) {
+	report := validate(t, load(t, skeletonPath))
+
+	if len(report.Checks) == 0 {
+		t.Error("no checks were run")
+	}
+	if issues := report.Issues(); len(issues) != 0 {
+		t.Errorf("unexpected issues: %+v", issues)
 	}
 }
 
@@ -126,8 +152,8 @@ func TestModuleLevelAssessmentIsAllowed(t *testing.T) {
 	if failed(report, "HOURS_TOPICS_EQ_MODULE") != nil {
 		t.Error("an assessment held only by the module row must not fail HOURS_TOPICS_EQ_MODULE")
 	}
-	if issues := report.Issues(); len(issues) != 0 {
-		t.Errorf("unexpected issues: %+v", issues)
+	if errs := errorsOf(report); len(errs) != 0 {
+		t.Errorf("unexpected errors: %+v", errs)
 	}
 }
 
@@ -168,18 +194,18 @@ func TestInvalidPrograms(t *testing.T) {
 
 func TestSummaryCountsPassedAndFailed(t *testing.T) {
 	p := load(t, examplePath)
-	p.V.Header.V.TotalHours = 20 // breaks HOURS_EQ_REQUESTED only
+	p.V.Header.V.TotalHours = 20 // breaks HOURS_EQ_REQUESTED; the example's unverified source stays a warning
 
 	report := validate(t, p)
 
-	if report.Summary.Errors != 1 {
-		t.Errorf("errors = %d, want 1", report.Summary.Errors)
+	if report.Summary.Errors != 1 || report.Summary.Warnings != 1 {
+		t.Errorf("summary = %+v, want 1 error and 1 warning", report.Summary)
 	}
-	if report.Summary.Passed != len(report.Checks)-1 {
-		t.Errorf("passed = %d, want %d", report.Summary.Passed, len(report.Checks)-1)
+	if want := len(report.Checks) - 2; report.Summary.Passed != want {
+		t.Errorf("passed = %d, want %d", report.Summary.Passed, want)
 	}
-	if len(report.Issues()) != 1 {
-		t.Errorf("issues = %d, want 1", len(report.Issues()))
+	if len(report.Issues()) != 2 {
+		t.Errorf("issues = %d, want 2", len(report.Issues()))
 	}
 }
 
@@ -196,9 +222,15 @@ func TestReportUsesTheClock(t *testing.T) {
 	}
 }
 
-func withoutActivities(p *program.Program) *program.Program {
-	for mi := range p.V.Curriculum.V.Modules {
-		topics := p.V.Curriculum.V.Modules[mi].V.Topics
+// skeletonStage drops every block the content step fills, leaving what exists
+// right after the skeleton is approved.
+func skeletonStage(p *program.Program) *program.Program {
+	root := &p.V
+	root.Status = "skeleton_approved"
+	root.Lectures, root.Sources, root.NormativeBasis = nil, nil, nil
+	root.Calendar, root.Assessment, root.Tools, root.TemplateSections = nil, nil, nil, nil
+	for mi := range root.Curriculum.V.Modules {
+		topics := root.Curriculum.V.Modules[mi].V.Topics
 		for ti := range topics {
 			topics[ti].V.Activities = nil
 		}
@@ -213,15 +245,14 @@ func lockTopic(topic *program.Node[program.Topic], hours program.Hours) {
 }
 
 // The allocator and the validator must agree: whatever allocate produces has
-// to pass every hours rule. (Programs with activities are covered separately
-// below: allocate does not rewrite them.)
+// to pass every rule at the skeleton stage.
 func TestAllocatedProgramsPassValidation(t *testing.T) {
 	allocateSvc := allocate.NewService(allocator.DefaultConfig())
 
 	cases := map[string]func() *program.Program{
-		"example, untouched": func() *program.Program { return withoutActivities(load(t, examplePath)) },
+		"example, untouched": func() *program.Program { return skeletonStage(load(t, examplePath)) },
 		"example with a locked topic": func() *program.Program {
-			p := withoutActivities(load(t, examplePath))
+			p := skeletonStage(load(t, examplePath))
 			lockTopic(&p.V.Curriculum.V.Modules[0].V.Topics[0], program.Hours{Lecture: 3, Practice: 3, Contact: 6, Total: 6})
 			return p
 		},
@@ -254,7 +285,7 @@ func TestAllocatedProgramsPassValidation(t *testing.T) {
 // When a locked topic makes the requested practice share impossible, the
 // allocator warns and the validator reports exactly that rule, nothing else.
 func TestUnreachablePracticeShareIsReportedByTheValidator(t *testing.T) {
-	p := withoutActivities(load(t, examplePath))
+	p := skeletonStage(load(t, examplePath))
 	lockTopic(&p.V.Curriculum.V.Modules[0].V.Topics[0], program.Hours{Lecture: 8, Contact: 8, Total: 8})
 
 	if err := allocate.NewService(allocator.DefaultConfig()).Allocate(context.Background(), p); err != nil {
@@ -267,10 +298,10 @@ func TestUnreachablePracticeShareIsReportedByTheValidator(t *testing.T) {
 	}
 }
 
-// allocate rewrites hours, not the content. Topics that already had activities
-// are left with the old ones, and the validator flags them so the content for
-// those topics gets regenerated.
-func TestStaleActivitiesAreFlaggedAfterAllocate(t *testing.T) {
+// allocate rewrites hours, not content. Whatever the content step had already
+// produced for the topics that changed is now out of step with their hours, and
+// the validator says so; the content for those topics must be regenerated.
+func TestStaleContentIsFlaggedAfterAllocate(t *testing.T) {
 	p := load(t, examplePath)
 	lockTopic(&p.V.Curriculum.V.Modules[0].V.Topics[0], program.Hours{Lecture: 3, Practice: 3, Contact: 6, Total: 6})
 
@@ -278,8 +309,10 @@ func TestStaleActivitiesAreFlaggedAfterAllocate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale := failed(validate(t, p), "HOURS_ACTIVITIES_EQ_TOPIC")
-	if stale == nil {
-		t.Fatal("changed topics must have their stale activities reported")
+	report := validate(t, p)
+	for _, ruleID := range []string{"HOURS_ACTIVITIES_EQ_TOPIC", "LECTURE_MINUTES", "CALENDAR_HOURS"} {
+		if failed(report, ruleID) == nil {
+			t.Errorf("%s should flag the content left behind by the reallocation", ruleID)
+		}
 	}
 }

@@ -59,6 +59,7 @@ func asProgram(t *testing.T, v Variant, hours float64) *program.Program {
 		"id": "p", "status": "skeleton_approved",
 		"request":          map[string]any{"rawText": "x"},
 		"header":           map[string]any{"totalHours": hours, "studyForm": "очная"},
+		"competencies":     v.Competencies,
 		"curriculum":       map[string]any{"modules": v.Modules, "totals": v.Totals},
 		"finalAttestation": map[string]any{"form": v.FinalAttestation.Form, "hours": v.FinalAttestation.Hours},
 	}

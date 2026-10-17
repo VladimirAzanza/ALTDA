@@ -56,14 +56,15 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder) validateBody {
 	return body
 }
 
-func TestValidCleanProgram(t *testing.T) {
+func TestValidProgramHasOnlyItsKnownWarning(t *testing.T) {
 	body := decode(t, post(t, `{"schemaVersion": "1.1", "program": `+example(t)+`}`))
 
 	if body.SchemaVersion != "1.1" {
 		t.Errorf("schemaVersion = %q", body.SchemaVersion)
 	}
-	if body.Issues == nil || len(body.Issues) != 0 {
-		t.Errorf("issues = %v, want an empty array (never null)", body.Issues)
+	// The example has one unverified source, and nothing else to report.
+	if len(body.Issues) != 1 || body.Issues[0]["ruleId"] != "SOURCE_UNVERIFIED" || body.Issues[0]["severity"] != "warning" {
+		t.Errorf("issues = %v, want only the SOURCE_UNVERIFIED warning", body.Issues)
 	}
 	if body.ValidationReport.GeneratedAt == "" || len(body.ValidationReport.Checks) == 0 {
 		t.Errorf("report is incomplete: %+v", body.ValidationReport)
@@ -87,16 +88,16 @@ func TestBrokenProgramListsIssues(t *testing.T) {
 
 	body := decode(t, post(t, `{"schemaVersion": "1.1", "program": `+string(broken)+`}`))
 
-	if len(body.Issues) != 1 {
-		t.Fatalf("issues = %v, want exactly one", body.Issues)
+	if len(body.Issues) != 2 { // the broken hours, plus the example's unverified source
+		t.Fatalf("issues = %v, want two", body.Issues)
 	}
 	issue := body.Issues[0]
 	if issue["ruleId"] != "HOURS_EQ_REQUESTED" || issue["severity"] != "error" ||
 		issue["path"] != "/header/totalHours" || issue["message"] == "" {
 		t.Errorf("issue = %v", issue)
 	}
-	if body.ValidationReport.Summary.Errors != 1 {
-		t.Errorf("summary.errors = %d, want 1", body.ValidationReport.Summary.Errors)
+	if body.ValidationReport.Summary.Errors != 1 || body.ValidationReport.Summary.Warnings != 1 {
+		t.Errorf("summary = %+v, want 1 error and 1 warning", body.ValidationReport.Summary)
 	}
 }
 

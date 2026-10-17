@@ -8,6 +8,7 @@ import (
 
 	httpserver "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http"
 	allocatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/allocate"
+	contenthandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/content"
 	healthhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/health"
 	parsehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/parse"
 	skeletonhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/skeleton"
@@ -15,6 +16,7 @@ import (
 	validatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/validate"
 	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocator"
+	contentservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/content"
 	parseservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/parse"
 	skeletonservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/skeleton"
 	validateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/validate"
@@ -34,13 +36,22 @@ func New() *App {
 }
 
 func (app *App) Run(ctx context.Context) error {
+	allocatorConfig := allocator.DefaultConfig()
+
+	parseService := parseservice.NewService()
+	allocateService := allocateservice.NewService(allocatorConfig)
+	validateService := validateservice.NewService()
+	skeletonService := skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocatorConfig)
+	contentService := contentservice.NewService(contentservice.NewTemplateGenerator(), validateService, contentservice.DefaultConfig())
+
 	server := httpserver.NewServer(
 		httpserver.NewConfig(),
 		healthhandler.NewHandler(),
-		parsehandler.NewHandler(parseservice.NewService()),
-		allocatehandler.NewHandler(allocateservice.NewService(allocator.DefaultConfig())),
-		validatehandler.NewHandler(validateservice.NewService()),
-		skeletonhandler.NewHandler(skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocator.DefaultConfig())),
+		parsehandler.NewHandler(parseService),
+		allocatehandler.NewHandler(allocateService),
+		validatehandler.NewHandler(validateService),
+		skeletonhandler.NewHandler(skeletonService),
+		contenthandler.NewHandler(contentService),
 		stubhandler.NewHandler(),
 	)
 

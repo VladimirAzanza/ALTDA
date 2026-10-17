@@ -5,6 +5,10 @@ import (
 	"sort"
 )
 
+// Distribute is the exported form of the largest remainder split, for callers
+// that divide whole units (minutes, points) by weight.
+func Distribute(total int, weights []float64) []int { return distribute(total, weights) }
+
 // distribute splits total (in half-hour units) among the weights with the
 // largest remainder method: floor every share, then hand the units left over
 // to the largest fractional parts. The result always sums to exactly total.

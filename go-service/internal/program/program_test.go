@@ -171,3 +171,120 @@ func TestRoundTripKeepsActivityFields(t *testing.T) {
 		t.Errorf("activity fields were lost\nwant: %v\n got: %v", want, got)
 	}
 }
+
+func marshalToMap(t *testing.T, p Program) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestUnchangedFieldsNeverGainZeroValues(t *testing.T) {
+	// A lecture with only an id: its typed fields (title, plan...) must not be
+	// invented when the program is written back.
+	var p Program
+	if err := json.Unmarshal([]byte(`{"id": "p", "lectures": [{"id": "L1.1"}]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+
+	lecture := marshalToMap(t, p)["lectures"].([]any)[0].(map[string]any)
+	if len(lecture) != 1 || lecture["id"] != "L1.1" {
+		t.Errorf("lecture = %v, want only its id", lecture)
+	}
+}
+
+func TestChangingOneFieldWritesOnlyThatField(t *testing.T) {
+	var p Program
+	in := `{"id": "p", "header": {"title": "Курс", "totalHours": 16, "studyForm": "очная", "authors": []}}`
+	if err := json.Unmarshal([]byte(in), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.V.Header.V.TotalHours = 40
+
+	header := marshalToMap(t, p)["header"].(map[string]any)
+	if header["totalHours"] != 40.0 {
+		t.Errorf("totalHours = %v, want 40", header["totalHours"])
+	}
+	if header["title"] != "Курс" || header["studyForm"] != "очная" || header["authors"] == nil {
+		t.Errorf("untouched fields changed: %v", header)
+	}
+}
+
+func TestAFieldTheViewDropsIsRemoved(t *testing.T) {
+	var p Program
+	in := `{"id": "p", "curriculum": {"modules": [{"id": "M1", "topics": [
+		{"id": "T1.1", "title": "Тема", "hours": {}, "prerequisites": ["T0.1"]}]}], "totals": {}}}`
+	if err := json.Unmarshal([]byte(in), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.V.Curriculum.V.Modules[0].V.Topics[0].V.Prerequisites = nil // omitempty: the view no longer encodes it
+
+	topic := marshalToMap(t, p)["curriculum"].(map[string]any)["modules"].([]any)[0].(map[string]any)["topics"].([]any)[0].(map[string]any)
+	if _, present := topic["prerequisites"]; present {
+		t.Errorf("prerequisites should have been removed: %v", topic)
+	}
+	if topic["title"] != "Тема" {
+		t.Errorf("other fields must stay: %v", topic)
+	}
+}
+
+func TestRequiredListsAreWrittenEvenWhenEmpty(t *testing.T) {
+	var p Program
+	if err := json.Unmarshal([]byte(`{"id": "p", "status": "skeleton_approved"}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.V.Sources = []Node[Source]{}
+	p.V.NormativeBasis = []string{}
+	p.V.Lectures = []Node[Lecture]{}
+
+	out := marshalToMap(t, p)
+	for _, key := range []string{"sources", "normativeBasis", "lectures"} {
+		list, present := out[key].([]any)
+		if !present || len(list) != 0 {
+			t.Errorf("%s = %v, want an empty list", key, out[key])
+		}
+	}
+}
+
+func TestNodeBuiltFromScratchWritesAllItsFields(t *testing.T) {
+	p := Program{V: Root{Lectures: []Node[Lecture]{{V: Lecture{
+		ID: "L1.1", TopicID: "T1.1", Title: "Лекция",
+		Plan: []Node[LectureStep]{{V: LectureStep{Step: "Введение", Minutes: 45}}},
+	}}}}}
+
+	lecture := marshalToMap(t, p)["lectures"].([]any)[0].(map[string]any)
+	if lecture["id"] != "L1.1" || lecture["topicId"] != "T1.1" || lecture["title"] != "Лекция" {
+		t.Errorf("lecture = %v", lecture)
+	}
+	step := lecture["plan"].([]any)[0].(map[string]any)
+	if step["minutes"] != 45.0 {
+		t.Errorf("step = %v", step)
+	}
+}
+
+func TestNestedChangeKeepsSiblingsAndUnknownFields(t *testing.T) {
+	var p Program
+	row := `{"lecture": 1, "practice": 0, "lab": 0, "selfStudy": 0, "assessment": 0, "contact": 1, "total": 1}`
+	in := `{"id": "p", "curriculum": {"modules": [{"id": "M1", "annotation": "заметка", "hours": ` + row + `, "topics": [
+		{"id": "T1.1", "hours": ` + row + `, "doubts": ["x"]},
+		{"id": "T1.2", "hours": ` + row + `}]}], "totals": ` + row + `}}`
+	if err := json.Unmarshal([]byte(in), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.V.Curriculum.V.Modules[0].V.Topics[1].V.Hours.Lecture = 5
+
+	module := marshalToMap(t, p)["curriculum"].(map[string]any)["modules"].([]any)[0].(map[string]any)
+	topics := module["topics"].([]any)
+	if topics[1].(map[string]any)["hours"].(map[string]any)["lecture"] != 5.0 {
+		t.Errorf("nested change not written: %v", topics[1])
+	}
+	if topics[0].(map[string]any)["doubts"] == nil || module["annotation"] != "заметка" {
+		t.Errorf("unknown fields were lost: %v", module)
+	}
+}

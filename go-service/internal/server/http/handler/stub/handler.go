@@ -11,7 +11,6 @@ import (
 
 var routes = []string{
 	"POST /v1/skeleton/regenerate",
-	"POST /v1/content",
 }
 
 type Handler struct{}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/contract"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/program"
+	"github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/dto"
 	httperror "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/error"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/response"
 	validateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/validate"
@@ -34,15 +35,7 @@ type validateRequest struct {
 type validateResponse struct {
 	SchemaVersion    string                  `json:"schemaVersion"`
 	ValidationReport *validateservice.Report `json:"validationReport"`
-	Issues           []issue                 `json:"issues"`
-}
-
-// issue is a failed check as the contract lists it in "issues".
-type issue struct {
-	RuleID   string                   `json:"ruleId"`
-	Severity validateservice.Severity `json:"severity"`
-	Message  string                   `json:"message"`
-	Path     string                   `json:"path"`
+	Issues           []dto.Issue             `json:"issues"`
 }
 
 func (h *Handler) Validate(w http.ResponseWriter, r *http.Request) {
@@ -66,20 +59,10 @@ func (h *Handler) Validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issues := []issue{} // never null, as the contract requires
-	for _, failed := range report.Issues() {
-		issues = append(issues, issue{
-			RuleID:   failed.RuleID,
-			Severity: failed.Severity,
-			Message:  failed.Message,
-			Path:     failed.Path,
-		})
-	}
-
 	response.JSON(w, http.StatusOK, validateResponse{
 		SchemaVersion:    contract.SchemaVersion,
 		ValidationReport: report,
-		Issues:           issues,
+		Issues:           dto.IssuesFrom(report.Checks),
 	})
 }
 

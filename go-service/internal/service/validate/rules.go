@@ -23,6 +23,24 @@ var (
 	ruleSkeletonDanglingOutcome = rule{"SKELETON_DANGLING_OUTCOME", CategoryConsistency, SeverityError}
 	ruleCoverageOutcomeTaught   = rule{"COVERAGE_OUTCOME_TAUGHT", CategoryCoverage, SeverityError}
 	ruleOrderPrerequisites      = rule{"ORDER_PREREQUISITES", CategoryConsistency, SeverityError}
+
+	// Rules of the full program.
+	ruleCalendarSessionNumbers  = rule{"CALENDAR_SESSION_NUMBERS", CategoryConsistency, SeverityError}
+	ruleCalendarHours           = rule{"CALENDAR_HOURS", CategoryHours, SeverityWarning}
+	ruleDanglingTopic           = rule{"CONSISTENCY_DANGLING_TOPIC", CategoryConsistency, SeverityError}
+	ruleCoverageOutcomeAssessed = rule{"COVERAGE_OUTCOME_ASSESSED", CategoryCoverage, SeverityError}
+	ruleOutcomePrefix           = rule{"CONSISTENCY_OUTCOME_PREFIX", CategoryConsistency, SeverityError}
+	ruleDanglingOutcome         = rule{"CONSISTENCY_DANGLING_OUTCOME", CategoryConsistency, SeverityError}
+	ruleDanglingReference       = rule{"CONSISTENCY_DANGLING_REFERENCE", CategoryConsistency, SeverityError}
+	ruleDanglingSource          = rule{"CONSISTENCY_DANGLING_SOURCE", CategoryConsistency, SeverityError}
+	ruleProfStandardLink        = rule{"CONSISTENCY_PROFSTANDARD_LINK", CategoryConsistency, SeverityError}
+	ruleLectureMinutes          = rule{"LECTURE_MINUTES", CategoryHours, SeverityError}
+	ruleTestKey                 = rule{"TEST_KEY", CategoryConsistency, SeverityError}
+	ruleTaskMaxScore            = rule{"TASK_MAXSCORE", CategoryConsistency, SeverityError}
+	ruleTaskDuration            = rule{"TASK_DURATION", CategoryHours, SeverityError}
+	ruleToolOutdated            = rule{"TOOL_OUTDATED", CategoryConsistency, SeverityWarning}
+	ruleSourceUnverified        = rule{"SOURCE_UNVERIFIED", CategorySources, SeverityWarning}
+	ruleSectionMissing          = rule{"SECTION_MISSING", CategoryCompleteness, SeverityError}
 )
 
 // checker collects the result of every rule evaluation.
