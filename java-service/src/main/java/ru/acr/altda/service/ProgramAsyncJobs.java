@@ -12,6 +12,7 @@ import ru.acr.altda.domain.PipelineStep;
 import ru.acr.altda.domain.ProgramStatus;
 import ru.acr.altda.domain.ProgramStatusMachine;
 import ru.acr.altda.go.GoClient;
+import ru.acr.altda.go.GoClientException;
 import ru.acr.altda.store.ProgramStore;
 
 import java.time.Instant;
@@ -76,7 +77,7 @@ public class ProgramAsyncJobs {
             PipelineStep step = ex.getMessage() != null && ex.getMessage().contains("skeleton")
                     ? PipelineStep.SKELETON
                     : PipelineStep.PARSE;
-            store.update(id, r -> r.markFailed(ex.getMessage(), step));
+            handleAsyncFailure(id, step, ex);
         }
     }
 
@@ -90,7 +91,7 @@ public class ProgramAsyncJobs {
             generateSkeletonInternal(id);
         } catch (Exception ex) {
             log.error("Skeleton failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.SKELETON));
+            handleAsyncFailure(id, PipelineStep.SKELETON, ex);
         }
     }
 
@@ -120,7 +121,7 @@ public class ProgramAsyncJobs {
             });
         } catch (Exception ex) {
             log.error("Regenerate skeleton failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.REGENERATE));
+            handleAsyncFailure(id, PipelineStep.REGENERATE, ex);
         }
     }
 
@@ -178,7 +179,7 @@ public class ProgramAsyncJobs {
             PipelineStep step = store.snapshot(id).status() == ProgramStatus.CONTENT_READY
                     ? PipelineStep.VALIDATE
                     : PipelineStep.CONTENT;
-            store.update(id, r -> r.markFailed(ex.getMessage(), step));
+            handleAsyncFailure(id, step, ex);
         }
     }
 
@@ -201,8 +202,34 @@ public class ProgramAsyncJobs {
             });
         } catch (Exception ex) {
             log.error("Validate failed for {}", id, ex);
-            store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.VALIDATE));
+            handleAsyncFailure(id, PipelineStep.VALIDATE, ex);
         }
+    }
+
+    /**
+     * Async failure policy:
+     * <ul>
+     *   <li>{@code node_locked} — clear busy only; program body/status unchanged (no FAILED).</li>
+     *   <li>{@code bad_request}/{@code schema_invalid} — mark FAILED (cannot surface HTTP mid-job).</li>
+     *   <li>{@code llm_timeout}/{@code llm_error}/connection — mark FAILED.</li>
+     * </ul>
+     */
+    private void handleAsyncFailure(UUID id, PipelineStep step, Exception ex) {
+        if (ex instanceof GoClientException gce) {
+            if (gce.isNodeLocked()) {
+                log.warn("node_locked for {} during {} — leaving program unchanged", id, step);
+                store.update(id, r -> r.setBusy(false));
+                return;
+            }
+            if (gce.shouldMarkProgramFailed(true)) {
+                store.update(id, r -> r.markFailed(gce.getMessage(), step));
+                return;
+            }
+            store.update(id, r -> r.setBusy(false));
+            return;
+        }
+        // Non-Go failures (unexpected) — treat as pipeline failure
+        store.update(id, r -> r.markFailed(ex.getMessage(), step));
     }
 
     private void generateSkeletonInternal(UUID id) {

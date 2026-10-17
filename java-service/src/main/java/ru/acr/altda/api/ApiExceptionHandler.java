@@ -30,14 +30,9 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(GoClientException.class)
     public ResponseEntity<ErrorResponse> goClient(GoClientException ex) {
-        HttpStatus status = switch (ex.getErrorCode()) {
-            case GoClientException.NODE_LOCKED -> HttpStatus.CONFLICT;
-            case GoClientException.BAD_REQUEST -> HttpStatus.BAD_REQUEST;
-            case GoClientException.SCHEMA_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
-            case GoClientException.LLM_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
-            default -> HttpStatus.BAD_GATEWAY;
-        };
-        return ResponseEntity.status(status)
+        // Sync path: surface typed Go codes to the UI. Program is not marked FAILED here
+        // (async jobs decide FAILED via GoClientException.shouldMarkProgramFailed).
+        return ResponseEntity.status(HttpStatus.valueOf(ex.canonicalHttpStatus()))
                 .body(new ErrorResponse(ex.getErrorCode(), ex.getMessage()));
     }
 

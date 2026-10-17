@@ -324,7 +324,14 @@ Port **8000**. UI polls Java; Go is never called from the browser.
 
 Mutating approve/return/lock/allocate/regenerate endpoints accept optimistic concurrency via `If-Match` (etag or bare version) and/or body `version`; mismatch → HTTP **409** `version_conflict`. `GET /programs/{id}` returns a deep-copied snapshot (`failedFrom` when status is Java-only `failed`).
 
-Java maps Go `node_locked` → HTTP 409 for the UI. Go timeouts / LLM errors → Java `status=failed` + `error` + `failedFrom` (orchestration only).
+Java `HttpGoClient` maps Go `{ "error", "message" }` to typed `GoClientException`:
+
+| Go `error` | UI HTTP | Program status |
+|------------|---------|----------------|
+| `node_locked` | 409 | Unchanged (never `FAILED`) |
+| `bad_request` | 400 | Unchanged on sync calls; `FAILED` only if the call was inside an async pipeline step |
+| `schema_invalid` | 422 | Same as `bad_request` |
+| `llm_timeout` / `llm_error` (incl. connection/read timeouts) | 504 / 502 | Java-only `FAILED` + `error` + `failedFrom` |
 
 ---
 

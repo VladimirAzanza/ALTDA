@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
-import ru.acr.altda.api.ConflictException;
 import ru.acr.altda.api.dto.ClarificationAnswerRequest;
 import ru.acr.altda.api.dto.ContentApproveRequest;
 import ru.acr.altda.api.dto.CreateProgramRequest;
@@ -257,9 +256,8 @@ public class ProgramService {
                 });
                 return store.snapshot(id);
             } catch (GoClientException ex) {
-                if (ex.isNodeLocked()) {
-                    throw new ConflictException(ex.getMessage());
-                }
+                // Sync path: surface typed Go error to UI; never mark FAILED here.
+                // node_locked → 409, bad_request → 400, schema_invalid → 422 via ApiExceptionHandler.
                 throw ex;
             }
         }
@@ -419,6 +417,12 @@ public class ProgramService {
                     done.issues(),
                     done.validationReport()
             );
+        } catch (GoClientException ex) {
+            if (ex.shouldMarkProgramFailed(false)) {
+                // Sync test mode: only LLM/transport failures mark FAILED
+                store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.CONTENT));
+            }
+            throw ex;
         } catch (Exception ex) {
             store.update(id, r -> r.markFailed(ex.getMessage(), PipelineStep.CONTENT));
             throw ex;

@@ -147,11 +147,7 @@ public class HttpGoClient implements GoClient {
         } catch (RestClientResponseException ex) {
             throw toGoException(path, ex);
         } catch (Exception ex) {
-            throw new GoClientException(
-                    GoClientException.LLM_ERROR,
-                    "Go service call failed on " + path + ": " + ex.getMessage(),
-                    502,
-                    ex);
+            throw transportFailure(path, ex);
         }
     }
 
@@ -166,32 +162,46 @@ public class HttpGoClient implements GoClient {
         } catch (RestClientResponseException ex) {
             throw toGoException(path, ex);
         } catch (Exception ex) {
-            String code = GoClientException.LLM_ERROR;
-            if (ex.getMessage() != null && ex.getMessage().toLowerCase().contains("timeout")) {
-                code = GoClientException.LLM_TIMEOUT;
-            }
-            throw new GoClientException(
-                    code,
-                    "Go service call failed on " + path + ": " + ex.getMessage(),
-                    code.equals(GoClientException.LLM_TIMEOUT) ? 504 : 502,
-                    ex);
+            throw transportFailure(path, ex);
         }
     }
 
+    /**
+     * Maps Go {@code { "error", "message" }} bodies to {@link GoClientException}
+     * with the contract error code and canonical HTTP status for the UI.
+     */
     private GoClientException toGoException(String path, RestClientResponseException ex) {
         String code = GoClientException.LLM_ERROR;
-        String message = ex.getResponseBodyAsString();
-        try {
-            JsonNode errBody = objectMapper.readTree(ex.getResponseBodyAsString());
-            if (errBody.hasNonNull("error")) {
-                code = errBody.get("error").asText();
+        String message = "Go error on " + path;
+        String raw = ex.getResponseBodyAsString();
+        if (raw != null && !raw.isBlank()) {
+            message = raw;
+            try {
+                JsonNode errBody = objectMapper.readTree(raw);
+                if (errBody.hasNonNull("error")) {
+                    code = errBody.get("error").asText();
+                }
+                if (errBody.hasNonNull("message")) {
+                    message = errBody.get("message").asText();
+                }
+            } catch (Exception ignored) {
+                // keep raw body as message
             }
-            if (errBody.hasNonNull("message")) {
-                message = errBody.get("message").asText();
-            }
-        } catch (Exception ignored) {
-            // keep raw body
         }
-        return new GoClientException(code, message, ex.getStatusCode().value(), ex);
+        return new GoClientException(code, message, GoClientException.canonicalHttpStatus(code), ex);
+    }
+
+    private static GoClientException transportFailure(String path, Exception ex) {
+        String code = GoClientException.LLM_ERROR;
+        String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
+        if (msg.contains("timeout") || msg.contains("timed out") || ex instanceof java.net.http.HttpTimeoutException
+                || ex instanceof java.net.SocketTimeoutException) {
+            code = GoClientException.LLM_TIMEOUT;
+        }
+        return new GoClientException(
+                code,
+                "Go service call failed on " + path + ": " + ex.getMessage(),
+                GoClientException.canonicalHttpStatus(code),
+                ex);
     }
 }
