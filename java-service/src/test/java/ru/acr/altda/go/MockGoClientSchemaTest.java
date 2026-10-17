@@ -2,6 +2,7 @@ package ru.acr.altda.go;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
@@ -61,7 +62,7 @@ class MockGoClientSchemaTest {
     }
 
     @Test
-    void mockGenerateContentProducesHourConsistentProgram() throws Exception {
+    void mockGenerateContentProducesHourConsistentProgramAndIssues() throws Exception {
         MockGoClient client = new MockGoClient(MAPPER);
         client.loadExamples();
 
@@ -82,6 +83,9 @@ class MockGoClientSchemaTest {
 
         assertThat(program.path("header").path("totalHours").asDouble()).isEqualTo(72.0);
         assertThat(program.path("curriculum").path("totals").path("total").asDouble()).isEqualTo(72.0);
+        assertThat(result.issues()).isNotEmpty();
+        assertThat(result.issues().get(0).path("ruleId").asText()).isEqualTo("SOURCE_UNVERIFIED");
+        assertThat(result.issues().get(0).path("path").asText()).startsWith("/");
 
         GoClient.ValidateResult validation = client.validate(program);
         boolean hoursOk = true;
@@ -92,6 +96,41 @@ class MockGoClientSchemaTest {
             }
         }
         assertThat(hoursOk).isTrue();
+    }
+
+    @Test
+    void mockSkeletonGenerateAllocatesHoursOnVariants() throws Exception {
+        MockGoClient client = new MockGoClient(MAPPER);
+        client.loadExamples();
+        ObjectNode seed = MAPPER.createObjectNode();
+        seed.putObject("request").putObject("params").put("totalHours", 72);
+        seed.putObject("header").put("totalHours", 72);
+
+        GoClient.SkeletonGenerateResult result = client.generateSkeleton(seed);
+        JsonNode first = result.variants().get(0);
+        assertThat(first.path("modules").get(0).path("hours").path("total").asDouble()).isPositive();
+        assertThat(first.path("totals").path("total").asDouble()).isEqualTo(72.0);
+        assertThat(first.path("finalAttestation").path("hours").path("total").asDouble()).isPositive();
+    }
+
+    @Test
+    void regenerateLockedNodeReturnsNodeLocked() throws Exception {
+        MockGoClient client = new MockGoClient(MAPPER);
+        client.loadExamples();
+        ObjectNode program = MAPPER.createObjectNode();
+        program.put("id", "p1");
+        ObjectNode module = program.putObject("curriculum").putArray("modules").addObject();
+        module.put("id", "M1");
+        module.putObject("_meta").put("locked", true);
+
+        ArrayNode nodeIds = MAPPER.createArrayNode().add("M1");
+        try {
+            client.regenerateSkeleton(program, "fix", nodeIds, true);
+            throw new AssertionError("expected GoClientException");
+        } catch (GoClientException ex) {
+            assertThat(ex.getErrorCode()).isEqualTo(GoClientException.NODE_LOCKED);
+            assertThat(ex.getHttpStatus()).isEqualTo(409);
+        }
     }
 
     @Test

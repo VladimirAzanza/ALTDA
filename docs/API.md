@@ -1,53 +1,78 @@
-# Java ↔ Go HTTP contract (MVP)
+# Java ↔ Go HTTP contract (final MVP)
 
-Concise contract for the 23 Oct MVP. Payloads follow `schema/program.schema.json` (v1.1). JSON field names are **camelCase**. Base URL for the Go service is configured on the Java side (`altda.go.base-url`).
+Payloads follow `schema/program.schema.json` (**schemaVersion `1.1`**). JSON fields are **camelCase**. Every request and response body includes `"schemaVersion": "1.1"` (except bare health).
 
-Status names in `program.status` are those of the schema (not informal aliases):
+**All Go calls are synchronous.** Java owns async orchestration and polling for the UI; it waits on each Go HTTP call within the per-call read timeout.
 
-| Schema status         | Informal alias (task brief) |
-|-----------------------|-----------------------------|
-| `intake`               | draft                       |
-| `clarifying`          | clarifying                  |
-| `skeleton_proposed`   | skeleton_ready              |
-| `skeleton_approved`   | skeleton_approved           |
-| `content_generating`  | generating                   |
-| `content_ready`       | (content done, pre-validate)|
-| `validated`           | ready                       |
-| `exported`            | exported                    |
-| `failed` *(Java only)*| Go timeout / pipeline error |
+Base URL: `altda.go.base-url`. Client: `altda.go.client=mock|http` (default `mock`).
 
-`failed` is an **orchestration** status on the Java API (`GET /programs/{id}`). It is **not** written into `program.status` (schema enum). The response includes `error` with the failure message so a Go timeout never leaves a заявка stuck mid-async.
+---
 
-Long-running work is started by Java; the UI polls Java `GET /programs/{id}`. Mutations while `busy=true` or `status=content_generating` return **HTTP 409**. Each record has a monotonic `version` (optimistic locking). The Go service may be synchronous per call for MVP (Java owns async orchestration).
+## Status names
 
-### Go client read timeouts (Java config)
+| `program.status` (schema) | Notes |
+|---------------------------|--------|
+| `intake` | |
+| `clarifying` | |
+| `skeleton_proposed` | |
+| `skeleton_approved` | |
+| `content_generating` | |
+| `content_ready` | |
+| `validated` | |
+| `exported` | |
+| ~~`failed`~~ | **Java orchestration only** — never written into `program.status`; appears on Java `GET /programs/{id}` with `error` |
 
-Configured under `altda.go.timeouts` in `java-service/src/main/resources/application.yml`:
+---
+
+## Errors (Go → Java)
+
+HTTP 4xx/5xx body:
+
+```json
+{ "error": "bad_request", "message": "human-readable" }
+```
+
+Fixed `error` codes:
+
+| Code | Typical HTTP | Meaning |
+|------|--------------|---------|
+| `bad_request` | 400 | Malformed / incomplete payload |
+| `node_locked` | 409 | Regenerate targeted a locked node while `respectLocks=true` |
+| `llm_timeout` | 504 / 408 | Model call timed out |
+| `llm_error` | 502 | Model / upstream failure |
+| `schema_invalid` | 422 | Response or input failed JSON Schema |
+
+---
+
+## Per-call read timeouts (Java)
+
+`altda.go.timeouts` in `java-service/.../application.yml`:
 
 | Call | Default |
 |------|---------|
-| `/v1/skeleton/generate`, `/v1/skeleton/regenerate` | 180 000 ms (~3 min) |
-| `/v1/content/generate` | 600 000 ms (~10 min) |
-| `/v1/validate`, `/v1/allocate` (if present) | 10 000 ms |
-| `/v1/parse` | 60 000 ms |
-
-Select implementation with `altda.go.client=mock` (default) or `http`.
-
----
-
-## Common conventions
-
-- **Content-Type:** `application/json; charset=utf-8`
-- **Errors:** `{ "error": "short_code", "message": "human-readable" }` with HTTP 4xx/5xx
-- **Program body:** a full or partial `program` object matching the schema for the current stage
-- **IDs:** stable node ids (`C1`, `T2.3`, `L2.3`, …). Nodes may carry `_meta.locked` and `_meta.dependsOn`
-- **No auth** in MVP
+| `POST /v1/skeleton/generate`, `POST /v1/skeleton/regenerate` | 180 000 ms (~3 min) |
+| `POST /v1/content` | 600 000 ms (~10 min) |
+| `POST /v1/validate`, `POST /v1/allocate` | 10 000 ms |
+| `POST /v1/parse` | 60 000 ms |
+| `GET /v1/health` | connect timeout only |
 
 ---
 
-## 1. Parse / clarify request
+## 0. Health
 
-Used when a заявка is created or clarifications are submitted.
+```
+GET /v1/health
+```
+
+**Response 200**
+
+```json
+{ "status": "ok" }
+```
+
+---
+
+## 1. Parse / clarify
 
 ```
 POST /v1/parse
@@ -57,6 +82,7 @@ POST /v1/parse
 
 ```json
 {
+  "schemaVersion": "1.1",
   "rawText": "string",
   "attachments": [],
   "clarifications": [
@@ -65,12 +91,11 @@ POST /v1/parse
 }
 ```
 
-`clarifications` may be empty on first call.
-
 **Response 200**
 
 ```json
 {
+  "schemaVersion": "1.1",
   "params": { },
   "missing": ["entryLevel"],
   "clarifications": [
@@ -80,11 +105,9 @@ POST /v1/parse
 }
 ```
 
-Shapes match `request.params`, `request.missing`, `request.clarifications`, `request.gapsReport` in the schema. When `missing` is empty, Java proceeds to skeleton generation.
-
 ---
 
-## 2. Generate skeleton (3 variants)
+## 2. Generate skeleton (hours already allocated)
 
 ```
 POST /v1/skeleton/generate
@@ -94,17 +117,17 @@ POST /v1/skeleton/generate
 
 ```json
 {
+  "schemaVersion": "1.1",
   "program": { },
   "selectedVariantKey": null
 }
 ```
 
-`program` must include at least `request` with filled `params` / answered clarifications. Optional `selectedVariantKey` is unused on first generation.
-
-**Response 200** — `$defs/skeletonResponse`:
+**Response 200**
 
 ```json
 {
+  "schemaVersion": "1.1",
   "variants": [
     {
       "key": "A",
@@ -113,20 +136,44 @@ POST /v1/skeleton/generate
       "cons": ["..."],
       "goal": "...",
       "competencies": [],
-      "modules": [],
-      "finalAttestation": { }
+      "modules": [
+        {
+          "id": "M1",
+          "title": "...",
+          "isIntro": false,
+          "weight": 0.5,
+          "hours": { "lecture": 2, "practice": 4, "lab": 0, "selfStudy": 0, "assessment": 0, "contact": 6, "total": 6 },
+          "topics": [
+            {
+              "id": "T1.1",
+              "title": "...",
+              "weight": 1,
+              "kinds": ["lecture", "practice"],
+              "outcomeIds": ["C1.K1"],
+              "hours": { "lecture": 2, "practice": 4, "lab": 0, "selfStudy": 0, "assessment": 0, "contact": 6, "total": 6 }
+            }
+          ]
+        }
+      ],
+      "finalAttestation": {
+        "form": "защита проекта",
+        "description": "...",
+        "outcomeIds": [],
+        "hours": { "lecture": 0, "practice": 0, "lab": 0, "selfStudy": 0, "assessment": 2, "contact": 0, "total": 2 }
+      },
+      "totals": { "lecture": 2, "practice": 4, "lab": 0, "selfStudy": 0, "assessment": 2, "contact": 6, "total": 8 }
     }
   ]
 }
 ```
 
-Up to **3** variants. Hours are **not** set by the LLM; the Go side (hours allocator) fills integer/0.5-step hours when materializing a chosen variant into a program skeleton (or returns weights only and documents that Java must not invent hours). For MVP, Go returns a response that Java can turn into `skeleton_proposed` program fields after the methodologist picks a variant.
+Up to **3** variants. Go’s allocator fills all `hours.*` and `totals` (0.5-step). **Java never computes hours.** On approve, Java **merges the chosen variant locally** into the working program (no `/materialize` endpoint).
 
-**Agreement needed:** whether `generate` returns pure `skeletonResponse` (weights only) and a separate `POST /v1/skeleton/materialize` applies hours, or Go returns an allocated draft program per variant. Preferred for MVP: response = `skeletonResponse`; on approve, Java calls content/materialize with the chosen variant and Go returns header/goal/competencies/curriculum/finalAttestation with hours filled.
+Transport may carry allocated `hours` / `totals` on variants beyond the weight-only `$defs/skeletonDraft` used for LLM output validation inside Go.
 
 ---
 
-## 3. Regenerate parts (locked / dependsOn)
+## 3. Regenerate (locked / dependsOn)
 
 ```
 POST /v1/skeleton/regenerate
@@ -136,6 +183,7 @@ POST /v1/skeleton/regenerate
 
 ```json
 {
+  "schemaVersion": "1.1",
   "program": { },
   "comment": "Упрости модуль 2",
   "nodeIds": ["M2", "T2.1"],
@@ -143,64 +191,38 @@ POST /v1/skeleton/regenerate
 }
 ```
 
-- If `nodeIds` is empty/null, Go regenerates the affected subgraph implied by `comment` (or the whole skeleton).
-- Nodes with `_meta.locked: true` must **not** be overwritten when `respectLocks` is true.
-- Cascades follow `_meta.dependsOn` (and the documented chain outcome → topic → lecture / seminar / questions).
+- Empty/null `nodeIds`: Go infers the subgraph from `comment` (or regenerates broadly).
+- With `respectLocks: true`, nodes with `_meta.locked: true` are not overwritten.
+- If any requested `nodeId` is locked and `respectLocks=true` → **409** `{ "error": "node_locked", "message": "..." }`.
 
 **Response 200**
 
 ```json
 {
+  "schemaVersion": "1.1",
   "program": { },
-  "changedPaths": ["/curriculum/modules/1", "/goal"],
+  "changedPaths": ["/curriculum/modules/1"],
   "variants": null
 }
 ```
 
-Either a patched `program` (single working skeleton) or a new `variants` list when the methodologist rejected the whole proposal. Exactly one of `program` / `variants` should be non-null.
+Exactly one of `program` / `variants` is non-null. Regenerated fragments already have hours from Go.
 
 ---
 
-## 4. Generate content
+## 4. Allocate (rebalance only)
 
 ```
-POST /v1/content/generate
+POST /v1/allocate
 ```
+
+Used **only after manual hour edits** in the UI (rebalance remaining weights/rows to match `header.totalHours`). Not used on the happy path after skeleton generate.
 
 **Request**
 
 ```json
 {
-  "program": { },
-  "nodeIds": null
-}
-```
-
-`program.status` is expected to be `skeleton_approved` (or `content_generating`). If `nodeIds` is set, only those nodes (plus dependents, minus locked) are filled; otherwise the full content package for the stage (`calendar`, `lectures`, `assessment`, `sources`, topic `activities`, …).
-
-**Response 200**
-
-```json
-{
-  "program": { },
-  "changedPaths": ["/lectures", "/assessment", "/calendar"]
-}
-```
-
-Returned `program` should be valid for status `content_ready` (schema `allOf`).
-
----
-
-## 5. Validate
-
-```
-POST /v1/validate
-```
-
-**Request**
-
-```json
-{
+  "schemaVersion": "1.1",
   "program": { }
 }
 ```
@@ -209,22 +231,35 @@ POST /v1/validate
 
 ```json
 {
-  "validationReport": {
-    "generatedAt": "2026-10-17T00:00:00Z",
-    "iterations": 0,
-    "summary": { "errors": 0, "warnings": 1, "passed": 12, "unverifiedSources": 1 },
-    "checks": [
-      {
-        "ruleId": "HOURS_EQ_REQUESTED",
-        "category": "hours",
-        "severity": "error",
-        "passed": true,
-        "message": "...",
-        "path": "/header/totalHours",
-        "relatedIds": []
-      }
-    ]
-  },
+  "schemaVersion": "1.1",
+  "program": { }
+}
+```
+
+---
+
+## 5. Generate content
+
+```
+POST /v1/content
+```
+
+**Request**
+
+```json
+{
+  "schemaVersion": "1.1",
+  "program": { },
+  "nodeIds": null
+}
+```
+
+**Response 200**
+
+```json
+{
+  "schemaVersion": "1.1",
+  "program": { },
   "issues": [
     {
       "ruleId": "SOURCE_UNVERIFIED",
@@ -236,47 +271,66 @@ POST /v1/validate
 }
 ```
 
-`validationReport` matches the schema. `issues` is the failed checks (errors + warnings) as a flat list for the UI — same information as `checks` where `passed: false`.
-
-Rules mirror `tools/validate_reference.py` (Go ports them 1:1).
+`issues[].path` is a **JSON Pointer**. `issues[].ruleId` values are identical to rule names in `tools/validate_reference.py` (e.g. `HOURS_EQ_REQUESTED`, `COVERAGE_OUTCOME_TAUGHT`, `SOURCE_UNVERIFIED`, `SECTION_MISSING`, …).
 
 ---
 
-## Java public REST (orchestration, not Go)
+## 6. Validate
 
-Implemented by the Spring Boot app on port **8000**. Static files are served from `classpath:/static/` (vanilla-JS SPA in a later phase).
+```
+POST /v1/validate
+```
+
+**Request**
+
+```json
+{
+  "schemaVersion": "1.1",
+  "program": { }
+}
+```
+
+**Response 200**
+
+```json
+{
+  "schemaVersion": "1.1",
+  "validationReport": { },
+  "issues": [
+    {
+      "ruleId": "HOURS_EQ_REQUESTED",
+      "severity": "error",
+      "message": "...",
+      "path": "/header/totalHours"
+    }
+  ]
+}
+```
+
+`validationReport` matches the schema. `issues` = failed checks (`passed: false`), same `ruleId` / JSON Pointer conventions as above.
+
+---
+
+## Java public REST (orchestration)
+
+Port **8000**. UI polls Java; Go is never called from the browser.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET`  | `/health` | Liveness: `{ "status": "ok", "goClient": "mock\|http" }` |
-| `POST` | `/api/generate` | **Test mode:** sync full pipeline with auto-approval |
-| `POST` | `/programs` | Create заявка from free-text (`{ "rawText": "..." }`) → 202 |
-| `GET`  | `/programs` | List programs (id, status, title, version, busy, …) |
-| `GET`  | `/programs/{id}` | Full snapshot for polling (includes `version`, `error`, `history`) |
-| `POST` | `/programs/{id}/clarifications` | Submit clarification answers |
-| `POST` | `/programs/{id}/skeleton/approve` | Approve a variant (`{ "variantKey": "A" }`) |
-| `POST` | `/programs/{id}/skeleton/return` | Return skeleton for corrections (`{ "comment": "..." }`) |
-| `POST` | `/programs/{id}/content/approve` | Approve content after validation |
-| `POST` | `/programs/{id}/content/return` | Return content for corrections (`{ "comment": "..." }`) |
+| `GET` | `/health` | Java liveness (+ which Go client) |
+| `POST` | `/api/generate` | Sync test pipeline, auto-approve |
+| `POST` | `/programs` … | Interactive заявка lifecycle (see java-service README) |
+| `GET` | `/programs/{id}/export/docx` | Phase 3 placeholder (501) |
 
-### Test mode: `POST /api/generate`
-
-One-shot endpoint for hackathon automated tests (works with `altda.go.client=mock`):
-
-```json
-{ "request": "ДПП ПК Анализ данных на Python, 72 ч", "answers": { "entryLevel": "Базовый" } }
-```
-
-Runs parse → skeleton → auto-approve first variant → content → validate **synchronously**, skipping human согласование. Returns `{ id, status, program, issues, validationReport }`.
-
-Async interactive steps: parse → skeleton → content → validate. While busy, `GET /programs/{id}` returns `"busy": true`. Revision history is stored on the Java side and mirrored into `program.approvals[]`.
+Java maps Go `node_locked` → HTTP 409 for the UI. Go timeouts / LLM errors → Java `status=failed` + `error` (orchestration only).
 
 ---
 
-## Open points for Go agreement
+## Locked decisions (no longer open)
 
-1. **Hours allocator ownership:** task split puts the allocator on Go; the README originally said Java. MVP assumes Go fills hours before returning a materializable skeleton/content (`/v1/allocate` reserved, 10 s timeout).
-2. **Materialize-on-approve:** confirm whether approve triggers a dedicated Go call or Java merges the chosen `skeletonDraft` locally and only calls content/generate. Current Java MVP merges locally, then calls content/generate.
-3. **Repair loop:** validate → repair (max 2) can stay inside Go’s `/v1/validate` or be a separate `/v1/repair`. MVP: Java calls `/v1/validate` once after content generation; repair can wait.
-4. **SSE:** out of scope for this phase; polling only.
-5. **`failed` status:** Java-only; Go should not emit it in `program.status`.
+1. **Hours:** Go allocates; Java never computes hours. Skeleton generate returns allocated variants; Java merges locally; **no `/materialize`**.
+2. **`/v1/allocate`:** rebalance after manual edits only.
+3. **`/v1/content`:** `{ program, issues[] }` (not changedPaths).
+4. **`failed`:** Java-only orchestration status.
+5. **Sync Go calls** + per-call timeouts as above.
+6. **SSE:** not in this phase (Java polling).

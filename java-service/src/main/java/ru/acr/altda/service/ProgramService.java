@@ -20,6 +20,7 @@ import ru.acr.altda.domain.ProgramRecord;
 import ru.acr.altda.domain.ProgramStatus;
 import ru.acr.altda.domain.ProgramStatusMachine;
 import ru.acr.altda.go.GoClient;
+import ru.acr.altda.go.GoClientException;
 import ru.acr.altda.store.ProgramStore;
 
 import java.time.Instant;
@@ -137,7 +138,7 @@ public class ProgramService {
         store.update(id, r -> {
             ProgramStatus from = r.getStatus();
             ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_APPROVED);
-            ObjectNode materialized = skeletonMaterializer.materialize(r.getProgram(), chosen);
+            ObjectNode materialized = skeletonMaterializer.mergeVariant(r.getProgram(), chosen);
             materialized.put("status", ProgramStatus.SKELETON_APPROVED.jsonValue());
             r.setProgram(materialized);
             r.setSelectedVariantKey(body.variantKey());
@@ -231,6 +232,7 @@ public class ProgramService {
 
     /**
      * Point regenerate: skeleton return or content section regenerate via Go.
+     * Locked nodeIds with respectLocks yield 409 {@code node_locked}.
      */
     public ProgramRecord regenerate(UUID id, RegenerateRequest body) {
         ProgramRecord record = store.require(id);
@@ -239,7 +241,36 @@ public class ProgramService {
         String comment = body.comment() == null ? "точечная перегенерация" : body.comment();
 
         if ("skeleton".equals(scope)) {
-            return returnSkeleton(id, new ReturnRequest(comment));
+            ArrayNode nodeIds = toArrayNode(body.nodeIds());
+            try {
+                GoClient.SkeletonRegenerateResult result =
+                        goClient.regenerateSkeleton(record.getProgram(), comment, nodeIds, true);
+                store.update(id, r -> {
+                    ProgramStatus from = r.getStatus();
+                    if (result.variants() != null && !result.variants().isNull()) {
+                        r.setSkeletonVariants(wrapVariants(result.variants()));
+                    }
+                    if (result.program() != null) {
+                        ObjectNode prog = result.program();
+                        prog.put("id", id.toString());
+                        r.setProgram(prog);
+                    }
+                    ProgramStatusMachine.assertTransition(from, ProgramStatus.SKELETON_PROPOSED);
+                    r.setStatus(ProgramStatus.SKELETON_PROPOSED);
+                    r.setBusy(false);
+                    r.clearError();
+                    appendApproval(r.getProgram(), "skeleton", false, comment);
+                    r.addHistory(new HistoryEntry(
+                            Instant.now(), "skeleton_regenerated", from, ProgramStatus.SKELETON_PROPOSED,
+                            comment, null));
+                });
+                return store.require(id);
+            } catch (GoClientException ex) {
+                if (ex.isNodeLocked()) {
+                    throw new ConflictException(ex.getMessage());
+                }
+                throw ex;
+            }
         }
 
         store.update(id, r -> {
@@ -256,6 +287,30 @@ public class ProgramService {
         });
         asyncJobs.runContentAndValidate(id);
         return store.require(id);
+    }
+
+    /** Rebalance hours via Go after manual edits (Java never computes hours). */
+    public ProgramRecord allocate(UUID id) {
+        ProgramRecord record = store.require(id);
+        assertEditable(record);
+        GoClient.AllocateResult result = goClient.allocate(record.getProgram());
+        store.update(id, r -> {
+            ObjectNode prog = result.program();
+            prog.put("id", id.toString());
+            r.setProgram(prog);
+            r.addHistory(new HistoryEntry(
+                    Instant.now(), "hours_reallocated", r.getStatus(), r.getStatus(),
+                    "manual edit rebalance", null));
+        });
+        return store.require(id);
+    }
+
+    private ArrayNode toArrayNode(java.util.List<String> ids) {
+        ArrayNode arr = objectMapper.createArrayNode();
+        if (ids != null) {
+            ids.forEach(arr::add);
+        }
+        return arr;
     }
 
     public ProgramRecord lockNodes(UUID id, LockNodesRequest body) {
@@ -354,7 +409,7 @@ public class ProgramService {
                 throw new IllegalStateException("Go returned no skeleton variants");
             }
             String variantKey = firstVariant.path("key").asText("A");
-            ObjectNode materialized = skeletonMaterializer.materialize(record.getProgram(), firstVariant);
+            ObjectNode materialized = skeletonMaterializer.mergeVariant(record.getProgram(), firstVariant);
             materialized.put("status", ProgramStatus.SKELETON_APPROVED.jsonValue());
             record.setProgram(materialized);
             record.setSelectedVariantKey(variantKey);
@@ -371,6 +426,9 @@ public class ProgramService {
             contentProgram.put("status", ProgramStatus.CONTENT_READY.jsonValue());
             record.setProgram(contentProgram);
             record.setStatus(ProgramStatus.CONTENT_READY);
+            if (content.issues() != null) {
+                record.setIssues(content.issues());
+            }
             appendApproval(record.getProgram(), "content", true, "auto-approve (test mode)");
 
             GoClient.ValidateResult validation = goClient.validate(record.getProgram());

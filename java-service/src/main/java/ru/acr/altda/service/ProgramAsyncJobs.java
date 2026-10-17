@@ -84,7 +84,7 @@ public class ProgramAsyncJobs {
         try {
             ProgramRecord record = store.require(id);
             GoClient.SkeletonRegenerateResult result = goClient.regenerateSkeleton(
-                    record.getProgram(), comment, null);
+                    record.getProgram(), comment, null, true);
             store.update(id, r -> {
                 if (result.variants() != null && !result.variants().isNull()) {
                     r.setSkeletonVariants(wrapVariants(result.variants()));
@@ -130,6 +130,9 @@ public class ProgramAsyncJobs {
                 prog.put("id", id.toString());
                 prog.put("status", ProgramStatus.CONTENT_READY.jsonValue());
                 r.setProgram(prog);
+                if (content.issues() != null) {
+                    r.setIssues(content.issues());
+                }
                 ProgramStatusMachine.assertTransition(r.getStatus(), ProgramStatus.CONTENT_READY);
                 r.setStatus(ProgramStatus.CONTENT_READY);
             });

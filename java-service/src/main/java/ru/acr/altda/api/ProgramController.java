@@ -117,6 +117,12 @@ public class ProgramController {
         return mapper.toResponse(programService.lockNodes(id, body));
     }
 
+    /** Ask Go to rebalance hours after manual edits (Java never computes hours). */
+    @PostMapping("/{id}/allocate")
+    public ProgramResponse allocate(@PathVariable UUID id) {
+        return mapper.toResponse(programService.allocate(id));
+    }
+
     /** Phase 3 placeholder: .docx export not implemented yet. */
     @GetMapping("/{id}/export/docx")
     public ResponseEntity<ErrorResponse> exportDocx(@PathVariable UUID id) {

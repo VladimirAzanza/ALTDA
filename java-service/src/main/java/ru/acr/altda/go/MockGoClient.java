@@ -12,13 +12,15 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Default stub ({@code altda.go.client=mock}): returns data built from
- * {@code examples/example_*.json}, adapting hours/type from the request text
- * so smoke tests can check hour totals without the real Go service.
+ * Default stub ({@code altda.go.client=mock}): simulates the Go skills service —
+ * including hour allocation on skeleton variants (Java never computes hours).
  */
 @Component
 @ConditionalOnProperty(name = "altda.go.client", havingValue = "mock", matchIfMissing = true)
@@ -49,6 +51,11 @@ public class MockGoClient implements GoClient {
         try (InputStream in = resource.getInputStream()) {
             return objectMapper.readTree(in);
         }
+    }
+
+    @Override
+    public HealthResult health() {
+        return new HealthResult("ok");
     }
 
     @Override
@@ -104,12 +111,38 @@ public class MockGoClient implements GoClient {
 
     @Override
     public SkeletonGenerateResult generateSkeleton(ObjectNode program) {
-        return new SkeletonGenerateResult(skeletonResponse.deepCopy());
+        ObjectNode response = skeletonResponse.deepCopy();
+        double totalHours = program.path("header").path("totalHours").asDouble(
+                program.path("request").path("params").path("totalHours").asDouble(16));
+        // Go allocator: attach hours to each variant before returning
+        for (JsonNode variant : response.withArray("variants")) {
+            allocateHoursOntoVariant((ObjectNode) variant, totalHours);
+        }
+        return new SkeletonGenerateResult(response.get("variants"));
     }
 
     @Override
-    public SkeletonRegenerateResult regenerateSkeleton(ObjectNode program, String comment, JsonNode nodeIds) {
+    public SkeletonRegenerateResult regenerateSkeleton(
+            ObjectNode program,
+            String comment,
+            JsonNode nodeIds,
+            boolean respectLocks
+    ) {
+        if (respectLocks && nodeIds != null && nodeIds.isArray()) {
+            Set<String> locked = collectLockedIds(program);
+            for (JsonNode idNode : nodeIds) {
+                String id = idNode.asText();
+                if (locked.contains(id)) {
+                    throw new GoClientException(
+                            GoClientException.NODE_LOCKED,
+                            "Node " + id + " is locked; refuse regenerate with respectLocks=true",
+                            409);
+                }
+            }
+        }
+
         ObjectNode updated = dppSkeleton.deepCopy();
+        updated.put("schemaVersion", SCHEMA_VERSION);
         updated.put("id", program.path("id").asText());
         updated.put("status", "skeleton_proposed");
         if (program.has("request")) {
@@ -120,15 +153,34 @@ public class MockGoClient implements GoClient {
             gaps.removeAll();
             gaps.add("Revision requested: " + comment);
         }
+        double totalHours = program.path("header").path("totalHours").asDouble(
+                program.path("request").path("params").path("totalHours").asDouble(16));
+        applyConsistentHours(updated, totalHours);
+
+        ObjectNode variants = skeletonResponse.deepCopy();
+        for (JsonNode variant : variants.withArray("variants")) {
+            allocateHoursOntoVariant((ObjectNode) variant, totalHours);
+        }
+
         ArrayNode changed = objectMapper.createArrayNode();
         changed.add("/goal");
         changed.add("/curriculum");
-        return new SkeletonRegenerateResult(updated, skeletonResponse.deepCopy(), changed);
+        return new SkeletonRegenerateResult(updated, variants.get("variants"), changed);
+    }
+
+    @Override
+    public AllocateResult allocate(ObjectNode program) {
+        ObjectNode copy = program.deepCopy();
+        double totalHours = copy.path("header").path("totalHours").asDouble(16);
+        applyConsistentHours(copy, totalHours);
+        copy.put("schemaVersion", SCHEMA_VERSION);
+        return new AllocateResult(copy);
     }
 
     @Override
     public ContentGenerateResult generateContent(ObjectNode program, JsonNode nodeIds) {
         ObjectNode content = fullProgram.deepCopy();
+        content.put("schemaVersion", SCHEMA_VERSION);
         content.put("id", program.path("id").asText());
         content.put("status", "content_ready");
 
@@ -145,8 +197,6 @@ public class MockGoClient implements GoClient {
 
         if (program.has("header")) {
             content.set("header", program.get("header").deepCopy());
-        } else {
-            content.withObject("/header").put("totalHours", totalHours);
         }
         content.withObject("/header").put("totalHours", totalHours);
 
@@ -156,8 +206,16 @@ public class MockGoClient implements GoClient {
         if (program.has("competencies")) {
             content.set("competencies", program.get("competencies").deepCopy());
         }
-
-        applyConsistentHours(content, totalHours);
+        // Prefer curriculum already allocated by Go skeleton merge
+        if (program.has("curriculum")
+                && program.path("curriculum").path("totals").path("total").asDouble(0) > 0) {
+            content.set("curriculum", program.get("curriculum").deepCopy());
+            if (program.has("finalAttestation")) {
+                content.set("finalAttestation", program.get("finalAttestation").deepCopy());
+            }
+        } else {
+            applyConsistentHours(content, totalHours);
+        }
 
         if ("DPP_PK".equals(programType)) {
             content.remove("doop");
@@ -205,13 +263,14 @@ public class MockGoClient implements GoClient {
         generation.put("embeddingTokens", 0);
         generation.put("costRub", 12.4);
 
-        ArrayNode changed = objectMapper.createArrayNode();
-        changed.add("/lectures");
-        changed.add("/assessment");
-        changed.add("/calendar");
-        changed.add("/sources");
-        changed.add("/curriculum");
-        return new ContentGenerateResult(content, changed);
+        ArrayNode issues = objectMapper.createArrayNode();
+        ObjectNode warnIssue = issues.addObject();
+        warnIssue.put("ruleId", "SOURCE_UNVERIFIED");
+        warnIssue.put("severity", "warning");
+        warnIssue.put("message", "Source not verified in local registry");
+        warnIssue.put("path", "/sources/0");
+
+        return new ContentGenerateResult(content, issues);
     }
 
     @Override
@@ -267,7 +326,33 @@ public class MockGoClient implements GoClient {
     }
 
     /**
+     * Go-side allocator simulation: write hours onto a skeleton variant (not Java business logic).
+     */
+    void allocateHoursOntoVariant(ObjectNode variant, double totalHours) {
+        ObjectNode shell = objectMapper.createObjectNode();
+        ObjectNode curriculum = shell.putObject("curriculum");
+        ArrayNode modules = curriculum.putArray("modules");
+        if (variant.has("modules") && variant.get("modules").isArray()) {
+            for (JsonNode m : variant.get("modules")) {
+                modules.add(m.deepCopy());
+            }
+        }
+        ObjectNode fa = shell.putObject("finalAttestation");
+        if (variant.has("finalAttestation")) {
+            fa.setAll((ObjectNode) variant.get("finalAttestation").deepCopy());
+        }
+        applyConsistentHours(shell, totalHours);
+        variant.set("modules", shell.path("curriculum").path("modules").deepCopy());
+        ObjectNode faOut = (ObjectNode) variant.withObject("/finalAttestation");
+        if (shell.path("finalAttestation").has("hours")) {
+            faOut.set("hours", shell.path("finalAttestation").path("hours").deepCopy());
+        }
+        variant.set("totals", shell.path("curriculum").path("totals").deepCopy());
+    }
+
+    /**
      * Rebuild curriculum hours so module topic sums + final attestation == totalHours.
+     * Used only inside this Go mock (stands in for the Go allocator).
      */
     void applyConsistentHours(ObjectNode program, double totalHours) {
         double attestation = Math.min(4.0, Math.max(1.0, Math.round(totalHours * 0.1 * 2) / 2.0));
@@ -284,6 +369,7 @@ public class MockGoClient implements GoClient {
             m.put("id", "M1");
             m.put("title", "Модуль 1");
             m.put("weight", 1);
+            m.put("isIntro", false);
             m.put("assessmentForm", "нет");
             m.putObject("hours");
             ArrayNode topics = m.putArray("topics");
@@ -293,6 +379,7 @@ public class MockGoClient implements GoClient {
             t.put("weight", 1);
             t.putObject("hours");
             t.putArray("outcomeIds");
+            t.putArray("kinds").add("lecture").add("practice");
         }
 
         int moduleCount = modules.size();
@@ -342,6 +429,9 @@ public class MockGoClient implements GoClient {
                             .put("content", "Практические задания по теме");
                 }
             }
+            if (!mod.has("assessmentForm")) {
+                mod.put("assessmentForm", "нет");
+            }
             putHours(mod.putObject("hours"), modLecture, modPractice, 0, 0, 0);
         }
 
@@ -389,6 +479,31 @@ public class MockGoClient implements GoClient {
         hours.put("assessment", assessment);
         hours.put("contact", contact);
         hours.put("total", contact + selfStudy + assessment);
+    }
+
+    private static Set<String> collectLockedIds(JsonNode node) {
+        Set<String> locked = new HashSet<>();
+        collectLockedIds(node, locked);
+        return locked;
+    }
+
+    private static void collectLockedIds(JsonNode node, Set<String> locked) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            if (node.path("_meta").path("locked").asBoolean(false) && node.has("id")) {
+                locked.add(node.get("id").asText());
+            }
+            Iterator<JsonNode> values = node.elements();
+            while (values.hasNext()) {
+                collectLockedIds(values.next(), locked);
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                collectLockedIds(child, locked);
+            }
+        }
     }
 
     static double extractHours(String rawText, double fallback) {

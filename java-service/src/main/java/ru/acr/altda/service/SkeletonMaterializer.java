@@ -7,8 +7,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 /**
- * Merges a chosen skeleton variant into the working program (MVP: no Go round-trip).
- * Hours stay unset here when the variant only has weights; mock/Go content step fills them.
+ * Merges a chosen Go skeleton variant into the working program locally.
+ * Hours must already be allocated on the variant by Go — Java never computes them.
+ * There is no {@code /materialize} endpoint.
  */
 @Component
 public class SkeletonMaterializer {
@@ -19,8 +20,9 @@ public class SkeletonMaterializer {
         this.objectMapper = objectMapper;
     }
 
-    public ObjectNode materialize(ObjectNode current, JsonNode variant) {
+    public ObjectNode mergeVariant(ObjectNode current, JsonNode variant) {
         ObjectNode result = current.deepCopy();
+        result.put("schemaVersion", "1.1");
         result.put("status", "skeleton_approved");
 
         JsonNode params = current.path("request").path("params");
@@ -33,6 +35,8 @@ public class SkeletonMaterializer {
         header.put("itDirection", textOr(params, "domain", "IT"));
         if (params.has("totalHours") && !params.get("totalHours").isNull()) {
             header.put("totalHours", params.get("totalHours").asDouble());
+        } else if (variant.has("totals") && variant.path("totals").has("total")) {
+            header.put("totalHours", variant.path("totals").path("total").asDouble());
         } else {
             header.put("totalHours", 16);
         }
@@ -79,12 +83,19 @@ public class SkeletonMaterializer {
         ArrayNode modules = curriculum.putArray("modules");
         if (variant.has("modules") && variant.get("modules").isArray()) {
             for (JsonNode mod : variant.get("modules")) {
-                modules.add(mod.deepCopy());
+                ObjectNode copy = mod.deepCopy();
+                if (!copy.has("assessmentForm")) {
+                    copy.put("assessmentForm", "нет");
+                }
+                // Hours must already be present from Go — do not invent or zero them
+                modules.add(copy);
             }
         }
-        // Placeholder totals — content/allocate step replaces with real hours
-        ObjectNode totals = curriculum.putObject("totals");
-        zeroHours(totals);
+        if (variant.has("totals")) {
+            curriculum.set("totals", variant.get("totals").deepCopy());
+        } else {
+            curriculum.set("totals", sumModuleHours(modules));
+        }
 
         ObjectNode finalAttestation = result.putObject("finalAttestation");
         if (variant.has("finalAttestation")) {
@@ -96,13 +107,14 @@ public class SkeletonMaterializer {
             } else {
                 finalAttestation.putArray("outcomeIds");
             }
+            if (fa.has("hours")) {
+                finalAttestation.set("hours", fa.get("hours").deepCopy());
+            }
         } else {
             finalAttestation.put("form", textOr(params, "finalAttestationForm", "зачёт"));
             finalAttestation.put("description", "");
             finalAttestation.putArray("outcomeIds");
         }
-        ObjectNode faHours = finalAttestation.putObject("hours");
-        zeroHours(faHours);
 
         if ("DPP_PK".equals(programType)) {
             ObjectNode dpp = result.putObject("dpp");
@@ -125,21 +137,45 @@ public class SkeletonMaterializer {
         return result;
     }
 
+    /** @deprecated use {@link #mergeVariant} — kept for call-site clarity during rename */
+    public ObjectNode materialize(ObjectNode current, JsonNode variant) {
+        return mergeVariant(current, variant);
+    }
+
+    private ObjectNode sumModuleHours(ArrayNode modules) {
+        double lecture = 0;
+        double practice = 0;
+        double lab = 0;
+        double selfStudy = 0;
+        double assessment = 0;
+        double contact = 0;
+        double total = 0;
+        for (JsonNode m : modules) {
+            JsonNode h = m.path("hours");
+            lecture += h.path("lecture").asDouble(0);
+            practice += h.path("practice").asDouble(0);
+            lab += h.path("lab").asDouble(0);
+            selfStudy += h.path("selfStudy").asDouble(0);
+            assessment += h.path("assessment").asDouble(0);
+            contact += h.path("contact").asDouble(0);
+            total += h.path("total").asDouble(0);
+        }
+        ObjectNode totals = objectMapper.createObjectNode();
+        totals.put("lecture", lecture);
+        totals.put("practice", practice);
+        totals.put("lab", lab);
+        totals.put("selfStudy", selfStudy);
+        totals.put("assessment", assessment);
+        totals.put("contact", contact);
+        totals.put("total", total);
+        return totals;
+    }
+
     private static String textOr(JsonNode params, String field, String fallback) {
         JsonNode n = params.get(field);
         if (n != null && !n.isNull() && n.isTextual() && !n.asText().isBlank()) {
             return n.asText();
         }
         return fallback;
-    }
-
-    private static void zeroHours(ObjectNode hours) {
-        hours.put("lecture", 0);
-        hours.put("practice", 0);
-        hours.put("lab", 0);
-        hours.put("selfStudy", 0);
-        hours.put("assessment", 0);
-        hours.put("contact", 0);
-        hours.put("total", 0);
     }
 }

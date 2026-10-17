@@ -15,19 +15,20 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 
 /**
- * HTTP implementation of {@link GoClient}. Each Go endpoint uses its own read timeout
- * from {@code altda.go.timeouts.*}.
+ * HTTP implementation of {@link GoClient}. Sync calls with per-endpoint read timeouts.
  */
 @Component
 @ConditionalOnProperty(name = "altda.go.client", havingValue = "http")
 public class HttpGoClient implements GoClient {
 
     private final ObjectMapper objectMapper;
+    private final RestClient healthClient;
     private final RestClient parseClient;
     private final RestClient skeletonClient;
     private final RestClient regenerateClient;
     private final RestClient contentClient;
     private final RestClient validateClient;
+    private final RestClient allocateClient;
 
     public HttpGoClient(ObjectMapper objectMapper, GoClientProperties properties) {
         this.objectMapper = objectMapper;
@@ -36,11 +37,13 @@ public class HttpGoClient implements GoClient {
                 .build();
         String baseUrl = properties.getBaseUrl();
         GoClientProperties.Timeouts t = properties.getTimeouts();
+        this.healthClient = buildClient(httpClient, baseUrl, Math.min(t.getValidateMs(), 10_000));
         this.parseClient = buildClient(httpClient, baseUrl, t.getParseMs());
         this.skeletonClient = buildClient(httpClient, baseUrl, t.getSkeletonMs());
         this.regenerateClient = buildClient(httpClient, baseUrl, t.getRegenerateMs());
         this.contentClient = buildClient(httpClient, baseUrl, t.getContentMs());
         this.validateClient = buildClient(httpClient, baseUrl, t.getValidateMs());
+        this.allocateClient = buildClient(httpClient, baseUrl, t.getAllocateMs());
     }
 
     private static RestClient buildClient(HttpClient httpClient, String baseUrl, long readTimeoutMs) {
@@ -53,8 +56,14 @@ public class HttpGoClient implements GoClient {
     }
 
     @Override
+    public HealthResult health() {
+        JsonNode response = get(healthClient, "/v1/health");
+        return new HealthResult(response.path("status").asText("ok"));
+    }
+
+    @Override
     public ParseResult parse(String rawText, JsonNode clarifications) {
-        ObjectNode body = objectMapper.createObjectNode();
+        ObjectNode body = baseBody();
         body.put("rawText", rawText);
         body.putArray("attachments");
         body.set("clarifications", clarifications == null
@@ -71,7 +80,7 @@ public class HttpGoClient implements GoClient {
 
     @Override
     public SkeletonGenerateResult generateSkeleton(ObjectNode program) {
-        ObjectNode body = objectMapper.createObjectNode();
+        ObjectNode body = baseBody();
         body.set("program", program);
         body.putNull("selectedVariantKey");
         JsonNode response = post(skeletonClient, "/v1/skeleton/generate", body);
@@ -79,12 +88,17 @@ public class HttpGoClient implements GoClient {
     }
 
     @Override
-    public SkeletonRegenerateResult regenerateSkeleton(ObjectNode program, String comment, JsonNode nodeIds) {
-        ObjectNode body = objectMapper.createObjectNode();
+    public SkeletonRegenerateResult regenerateSkeleton(
+            ObjectNode program,
+            String comment,
+            JsonNode nodeIds,
+            boolean respectLocks
+    ) {
+        ObjectNode body = baseBody();
         body.set("program", program);
         body.put("comment", comment == null ? "" : comment);
         body.set("nodeIds", nodeIds == null ? objectMapper.nullNode() : nodeIds);
-        body.put("respectLocks", true);
+        body.put("respectLocks", respectLocks);
         JsonNode response = post(regenerateClient, "/v1/skeleton/regenerate", body);
         ObjectNode prog = response.has("program") && !response.get("program").isNull()
                 ? (ObjectNode) response.get("program")
@@ -93,20 +107,52 @@ public class HttpGoClient implements GoClient {
     }
 
     @Override
+    public AllocateResult allocate(ObjectNode program) {
+        ObjectNode body = baseBody();
+        body.set("program", program);
+        JsonNode response = post(allocateClient, "/v1/allocate", body);
+        return new AllocateResult((ObjectNode) response.get("program"));
+    }
+
+    @Override
     public ContentGenerateResult generateContent(ObjectNode program, JsonNode nodeIds) {
-        ObjectNode body = objectMapper.createObjectNode();
+        ObjectNode body = baseBody();
         body.set("program", program);
         body.set("nodeIds", nodeIds == null ? objectMapper.nullNode() : nodeIds);
-        JsonNode response = post(contentClient, "/v1/content/generate", body);
-        return new ContentGenerateResult((ObjectNode) response.get("program"), response.get("changedPaths"));
+        JsonNode response = post(contentClient, "/v1/content", body);
+        JsonNode issues = response.has("issues") ? response.get("issues") : objectMapper.createArrayNode();
+        return new ContentGenerateResult((ObjectNode) response.get("program"), issues);
     }
 
     @Override
     public ValidateResult validate(ObjectNode program) {
-        ObjectNode body = objectMapper.createObjectNode();
+        ObjectNode body = baseBody();
         body.set("program", program);
         JsonNode response = post(validateClient, "/v1/validate", body);
         return new ValidateResult(response.get("validationReport"), response.get("issues"));
+    }
+
+    private ObjectNode baseBody() {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("schemaVersion", SCHEMA_VERSION);
+        return body;
+    }
+
+    private JsonNode get(RestClient client, String path) {
+        try {
+            return client.get()
+                    .uri(path)
+                    .retrieve()
+                    .body(JsonNode.class);
+        } catch (RestClientResponseException ex) {
+            throw toGoException(path, ex);
+        } catch (Exception ex) {
+            throw new GoClientException(
+                    GoClientException.LLM_ERROR,
+                    "Go service call failed on " + path + ": " + ex.getMessage(),
+                    502,
+                    ex);
+        }
     }
 
     private JsonNode post(RestClient client, String path, ObjectNode body) {
@@ -118,12 +164,34 @@ public class HttpGoClient implements GoClient {
                     .retrieve()
                     .body(JsonNode.class);
         } catch (RestClientResponseException ex) {
-            throw new GoClientException(
-                    "Go service error " + ex.getStatusCode().value() + " on " + path + ": "
-                            + ex.getResponseBodyAsString(),
-                    ex);
+            throw toGoException(path, ex);
         } catch (Exception ex) {
-            throw new GoClientException("Go service call failed on " + path + ": " + ex.getMessage(), ex);
+            String code = GoClientException.LLM_ERROR;
+            if (ex.getMessage() != null && ex.getMessage().toLowerCase().contains("timeout")) {
+                code = GoClientException.LLM_TIMEOUT;
+            }
+            throw new GoClientException(
+                    code,
+                    "Go service call failed on " + path + ": " + ex.getMessage(),
+                    code.equals(GoClientException.LLM_TIMEOUT) ? 504 : 502,
+                    ex);
         }
+    }
+
+    private GoClientException toGoException(String path, RestClientResponseException ex) {
+        String code = GoClientException.LLM_ERROR;
+        String message = ex.getResponseBodyAsString();
+        try {
+            JsonNode errBody = objectMapper.readTree(ex.getResponseBodyAsString());
+            if (errBody.hasNonNull("error")) {
+                code = errBody.get("error").asText();
+            }
+            if (errBody.hasNonNull("message")) {
+                message = errBody.get("message").asText();
+            }
+        } catch (Exception ignored) {
+            // keep raw body
+        }
+        return new GoClientException(code, message, ex.getStatusCode().value(), ex);
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import ru.acr.altda.api.dto.ErrorResponse;
+import ru.acr.altda.go.GoClientException;
 import ru.acr.altda.store.OptimisticLockException;
 import ru.acr.altda.store.ProgramNotFoundException;
 
@@ -20,8 +21,24 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ErrorResponse> conflict(ConflictException ex) {
+        String code = ex.getMessage() != null && ex.getMessage().toLowerCase().contains("lock")
+                ? GoClientException.NODE_LOCKED
+                : "conflict";
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ErrorResponse("conflict", ex.getMessage()));
+                .body(new ErrorResponse(code, ex.getMessage()));
+    }
+
+    @ExceptionHandler(GoClientException.class)
+    public ResponseEntity<ErrorResponse> goClient(GoClientException ex) {
+        HttpStatus status = switch (ex.getErrorCode()) {
+            case GoClientException.NODE_LOCKED -> HttpStatus.CONFLICT;
+            case GoClientException.BAD_REQUEST -> HttpStatus.BAD_REQUEST;
+            case GoClientException.SCHEMA_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case GoClientException.LLM_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            default -> HttpStatus.BAD_GATEWAY;
+        };
+        return ResponseEntity.status(status)
+                .body(new ErrorResponse(ex.getErrorCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(OptimisticLockException.class)
