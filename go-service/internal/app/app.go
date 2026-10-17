@@ -8,7 +8,9 @@ import (
 
 	httpserver "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http"
 	healthhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/health"
+	parsehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/parse"
 	stubhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/stub"
+	parseservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/parse"
 )
 
 type App struct {
@@ -28,6 +30,7 @@ func (app *App) Run(ctx context.Context) error {
 	server := httpserver.NewServer(
 		httpserver.NewConfig(),
 		healthhandler.NewHandler(),
+		parsehandler.NewHandler(parseservice.NewService()),
 		stubhandler.NewHandler(),
 	)
 

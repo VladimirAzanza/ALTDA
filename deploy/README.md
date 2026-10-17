@@ -1,18 +1,23 @@
 # Deploy
 
-Runs the Java service from `java-service/` (UI + REST on :8000).
+Runs both services with Docker Compose:
+
+- `go` — Go engine, port 8081 (contract in `docs/API.md`)
+- `java` — Spring Boot UI + REST, port 8000
 
 ```bash
 cd deploy
-docker compose up --build            # mock Go client
-open http://localhost:8000/
-../scripts/smoke_test.sh http://localhost:8000
+docker compose -p altda up --build                
+ALTDA_GO_CLIENT=http docker compose -p altda up --build
+docker compose down
 ```
 
-Real Go service running on the host at :8081:
+Check the Go service directly:
 
 ```bash
-ALTDA_GO_CLIENT=http docker compose up --build
+curl -s localhost:8081/v1/health
+curl -s -X POST localhost:8081/v1/parse -H 'Content-Type: application/json' \
+  -d '{"schemaVersion":"1.1","rawText":"ДПП ПК Анализ данных на Python, 72 ч"}'
 ```
 
-Data is in memory: restarting the container loses all programs.
+Java keeps programs in memory: restarting the container loses them.

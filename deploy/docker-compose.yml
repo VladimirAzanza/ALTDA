@@ -1,16 +1,34 @@
-# UI: http://localhost:8000/   Health: http://localhost:8000/health
+# ALTDA — Java service (UI + REST) and Go service (engine).
+#
+#   docker compose -p altda up --build                        # Java uses its built-in mock of Go
+#   ALTDA_GO_CLIENT=http docker compose -p altda up --build   # Java calls our Go service
+#
+# UI:         http://localhost:8000/
+# Java:       http://localhost:8000/health
+# Go direct:  http://localhost:8081/v1/health
 services:
+  go:
+    build:
+      context: ../go-service
+    image: altda-go
+    ports:
+      - "${GO_PORT:-8081}:8081"
+    env_file:
+      - ../go-service/.env
+    restart: unless-stopped
+
   java:
     build:
       context: ../java-service
     image: altda-java
+    depends_on:
+      - go
     ports:
       - "${JAVA_PORT:-8000}:8000"
     environment:
       # mock | http
       ALTDA_GO_CLIENT: ${ALTDA_GO_CLIENT:-mock}
-      # Only used when ALTDA_GO_CLIENT=http. Default: Go running on the host at :8081.
-      ALTDA_GO_BASE_URL: ${GO_BASE_URL:-http://host.docker.internal:8081}
+      ALTDA_GO_BASE_URL: ${GO_BASE_URL:-http://go:8081}
       JAVA_OPTS: ${JAVA_OPTS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -21,16 +39,3 @@ services:
       retries: 6
       start_period: 30s
     restart: unless-stopped
-
-  # Go service (engine). Uncomment once go-service/ has a Dockerfile, then run with
-  #   ALTDA_GO_CLIENT=http GO_BASE_URL=http://go:8081 docker compose up --build
-  #
-  # go:
-  #   build:
-  #     context: ../go-service
-  #   image: altda-go
-  #   ports:
-  #     - "8081:8081"
-  #   environment:
-  #     CLOUDRU_API_KEY: ${CLOUDRU_API_KEY:-}
-  #   restart: unless-stopped

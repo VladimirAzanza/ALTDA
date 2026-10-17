@@ -10,7 +10,6 @@ import (
 )
 
 var routes = []string{
-	"POST /v1/parse",
 	"POST /v1/skeleton/generate",
 	"POST /v1/skeleton/regenerate",
 	"POST /v1/allocate",
