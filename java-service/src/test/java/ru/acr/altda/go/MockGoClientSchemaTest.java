@@ -127,14 +127,9 @@ class MockGoClientSchemaTest {
         ArrayNode nodeIds = MAPPER.createArrayNode().add("M1").add("M2");
         GoClient.ContentGenerateResult result = client.generateContent(program, nodeIds);
         assertThat(result.issues().isArray()).isTrue();
-        assertThat(result.program().path("generation").path("skippedLockedNodeIds"))
-                .extracting(n -> {
-                    java.util.List<String> ids = new java.util.ArrayList<>();
-                    n.forEach(x -> ids.add(x.asText()));
-                    return ids;
-                })
-                .asList()
-                .contains("M1");
+        JsonNode skipped = result.program().path("generation").path("skippedLockedNodeIds");
+        assertThat(skipped.isArray()).isTrue();
+        assertThat(skipped.toString()).contains("M1");
     }
 
     @Test
