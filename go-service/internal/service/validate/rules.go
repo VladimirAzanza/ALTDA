@@ -16,6 +16,13 @@ var (
 	ruleHoursEqRequested       = rule{"HOURS_EQ_REQUESTED", CategoryHours, SeverityError}
 	ruleHoursPracticeShare     = rule{"HOURS_PRACTICE_SHARE", CategoryHours, SeverityError}
 	ruleHoursActivitiesEqTopic = rule{"HOURS_ACTIVITIES_EQ_TOPIC", CategoryHours, SeverityError}
+
+	// Rules of the skeleton step; some are shared with the full program.
+	ruleSkeletonModuleWeights   = rule{"SKELETON_MODULE_WEIGHTS", CategoryHours, SeverityError}
+	ruleSkeletonTopicWeights    = rule{"SKELETON_TOPIC_WEIGHTS", CategoryHours, SeverityError}
+	ruleSkeletonDanglingOutcome = rule{"SKELETON_DANGLING_OUTCOME", CategoryConsistency, SeverityError}
+	ruleCoverageOutcomeTaught   = rule{"COVERAGE_OUTCOME_TAUGHT", CategoryCoverage, SeverityError}
+	ruleOrderPrerequisites      = rule{"ORDER_PREREQUISITES", CategoryConsistency, SeverityError}
 )
 
 // checker collects the result of every rule evaluation.

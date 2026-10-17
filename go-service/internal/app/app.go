@@ -10,11 +10,13 @@ import (
 	allocatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/allocate"
 	healthhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/health"
 	parsehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/parse"
+	skeletonhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/skeleton"
 	stubhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/stub"
 	validatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/validate"
 	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocator"
 	parseservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/parse"
+	skeletonservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/skeleton"
 	validateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/validate"
 )
 
@@ -38,6 +40,7 @@ func (app *App) Run(ctx context.Context) error {
 		parsehandler.NewHandler(parseservice.NewService()),
 		allocatehandler.NewHandler(allocateservice.NewService(allocator.DefaultConfig())),
 		validatehandler.NewHandler(validateservice.NewService()),
+		skeletonhandler.NewHandler(skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocator.DefaultConfig())),
 		stubhandler.NewHandler(),
 	)
 

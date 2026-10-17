@@ -17,10 +17,19 @@ type Request struct {
 	Params *Node[Params] `json:"params,omitempty"`
 }
 
-// Params is the part of request.params that affects hours.
+// Params is the part of request.params Go reads. A nil pointer means the
+// request did not state the value (JSON null or absent).
 type Params struct {
-	MinPracticeShare *float64 `json:"minPracticeShare,omitempty"`
-	IsInternship     *bool    `json:"isInternship,omitempty"`
+	ProgramType          *string  `json:"programType,omitempty"`
+	Title                *string  `json:"title,omitempty"`
+	Domain               *string  `json:"domain,omitempty"`
+	TotalHours           *float64 `json:"totalHours,omitempty"`
+	Audience             *string  `json:"audience,omitempty"`
+	EntryLevel           *string  `json:"entryLevel,omitempty"`
+	StudyForm            *string  `json:"studyForm,omitempty"`
+	FinalAttestationForm *string  `json:"finalAttestationForm,omitempty"`
+	MinPracticeShare     *float64 `json:"minPracticeShare,omitempty"`
+	IsInternship         *bool    `json:"isInternship,omitempty"`
 }
 
 type Header struct {
