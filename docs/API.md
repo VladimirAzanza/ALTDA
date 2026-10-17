@@ -38,9 +38,22 @@ Fixed `error` codes:
 |------|--------------|---------|
 | `bad_request` | 400 | Malformed / incomplete payload |
 | `node_locked` | 409 | Regenerate targeted a locked node while `respectLocks=true` |
-| `llm_timeout` | 504 / 408 | Model call timed out |
+| `llm_timeout` | **504** | Model call timed out (Java maps this code to HTTP 504 only — never 408) |
 | `llm_error` | 502 | Model / upstream failure |
 | `schema_invalid` | 422 | Response or input failed JSON Schema |
+
+---
+
+## Hour formulas (every level)
+
+Every `hours` object (topic, module, final attestation) and curriculum `totals` use the same identities. Go’s allocator and `HOURS_*` validation rules (`HOURS_EQ_REQUESTED`, `HOURS_ROW_SUM`, …) enforce them; **Java never recalculates**:
+
+```
+contact = lecture + practice + lab
+total   = contact + selfStudy + assessment
+```
+
+Values are in academic hours with **0.5** step. Module hours equal the sum of their topics (plus module-level assessment if any); program `totals` equal the sum of modules plus final-attestation hours.
 
 ---
 
@@ -167,7 +180,7 @@ POST /v1/skeleton/generate
 }
 ```
 
-Up to **3** variants. Go’s allocator fills all `hours.*` and `totals` (0.5-step). **Java never computes hours.** On approve, Java **merges the chosen variant locally** into the working program (no `/materialize` endpoint).
+Up to **3** variants. Go’s allocator fills all `hours.*` and `totals` using the [hour formulas](#hour-formulas-every-level) (0.5-step). **Java never computes hours.** On approve, Java **merges the chosen variant locally** into the working program (no `/materialize` endpoint).
 
 Transport may carry allocated `hours` / `totals` on variants beyond the weight-only `$defs/skeletonDraft` used for LLM output validation inside Go.
 
@@ -216,7 +229,7 @@ Exactly one of `program` / `variants` is non-null. Regenerated fragments already
 POST /v1/allocate
 ```
 
-Used **only after manual hour edits** in the UI (rebalance remaining weights/rows to match `header.totalHours`). Not used on the happy path after skeleton generate.
+Used **only after manual hour edits** in the UI (rebalance remaining weights/rows to match `header.totalHours` using the [hour formulas](#hour-formulas-every-level)). Not used on the happy path after skeleton generate.
 
 **Request**
 
@@ -254,6 +267,9 @@ POST /v1/content
 }
 ```
 
+- `nodeIds: null` (or omitted): generate / fill content for the whole program.
+- **Non-null `nodeIds`:** regenerate **only those nodes plus their dependents**, **skipping locked** nodes (`_meta.locked: true`) — same targeting semantics as [`/v1/skeleton/regenerate`](#3-regenerate-locked--dependson) (without requiring `respectLocks` / `node_locked` 409 on this endpoint: locked targets are simply skipped).
+
 **Response 200**
 
 ```json
@@ -271,7 +287,7 @@ POST /v1/content
 }
 ```
 
-`issues[].path` is a **JSON Pointer**. `issues[].ruleId` values are identical to rule names in `tools/validate_reference.py` (e.g. `HOURS_EQ_REQUESTED`, `COVERAGE_OUTCOME_TAUGHT`, `SOURCE_UNVERIFIED`, `SECTION_MISSING`, …).
+`issues` is **always an array, never `null`** (empty `[]` when clean). `issues[].path` is a **JSON Pointer**. `issues[].ruleId` values are identical to rule names in `tools/validate_reference.py` (e.g. `HOURS_EQ_REQUESTED`, `HOURS_ROW_SUM`, `COVERAGE_OUTCOME_TAUGHT`, `SOURCE_UNVERIFIED`, `SECTION_MISSING`, …).
 
 ---
 
@@ -307,7 +323,7 @@ POST /v1/validate
 }
 ```
 
-`validationReport` matches the schema. `issues` = failed checks (`passed: false`), same `ruleId` / JSON Pointer conventions as above.
+`validationReport` matches the schema. `issues` is **always an array** (never `null`) = failed checks (`passed: false`), same `ruleId` / JSON Pointer conventions as above. `HOURS_*` rules use the [hour formulas](#hour-formulas-every-level).
 
 ---
 
@@ -331,15 +347,17 @@ Java `HttpGoClient` maps Go `{ "error", "message" }` to typed `GoClientException
 | `node_locked` | 409 | Unchanged (never `FAILED`) |
 | `bad_request` | 400 | Unchanged on sync calls; `FAILED` only if the call was inside an async pipeline step |
 | `schema_invalid` | 422 | Same as `bad_request` |
-| `llm_timeout` / `llm_error` (incl. connection/read timeouts) | 504 / 502 | Java-only `FAILED` + `error` + `failedFrom` |
+| `llm_timeout` (incl. connection/read timeouts mapped to this code) | **504** | Java-only `FAILED` + `error` + `failedFrom` |
+| `llm_error` | 502 | Java-only `FAILED` + `error` + `failedFrom` |
 
 ---
 
 ## Locked decisions (no longer open)
 
-1. **Hours:** Go allocates; Java never computes hours. Skeleton generate returns allocated variants; Java merges locally; **no `/materialize`**.
-2. **`/v1/allocate`:** rebalance after manual edits only.
-3. **`/v1/content`:** `{ program, issues[] }` (not changedPaths).
-4. **`failed`:** Java-only orchestration status.
-5. **Sync Go calls** + per-call timeouts as above.
-6. **SSE:** not in this phase (Java polling).
+1. **Hours:** Go allocates with `contact = lecture+practice+lab`, `total = contact+selfStudy+assessment` at every level; Java never recalculates. Skeleton generate returns allocated variants; Java merges locally; **no `/materialize`**.
+2. **`/v1/allocate`:** rebalance after manual edits only (same formulas).
+3. **`/v1/content`:** `{ program, issues[] }` (`issues` always an array). Non-null `nodeIds` = those nodes + dependents, skipping locked (same as regenerate targeting).
+4. **`llm_timeout` → HTTP 504 only** (not 408).
+5. **`failed`:** Java-only orchestration status.
+6. **Sync Go calls** + per-call timeouts as above.
+7. **SSE:** not in this phase (Java polling).

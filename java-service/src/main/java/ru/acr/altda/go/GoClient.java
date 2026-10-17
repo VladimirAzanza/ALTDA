@@ -30,12 +30,21 @@ public interface GoClient {
             boolean respectLocks
     );
 
-    /** Rebalance hours after manual edits only. */
+    /**
+     * Rebalance hours after manual edits only.
+     * Formulas (every level): {@code contact = lecture+practice+lab},
+     * {@code total = contact+selfStudy+assessment}.
+     */
     AllocateResult allocate(ObjectNode program);
 
-    /** POST /v1/content — returns program + issues[]. */
+    /**
+     * POST /v1/content — returns {@code program} + {@code issues[]} ({@code issues} never null).
+     * Non-null {@code nodeIds}: regenerate only those nodes plus dependents, skipping locked
+     * (same targeting semantics as {@link #regenerateSkeleton}).
+     */
     ContentGenerateResult generateContent(ObjectNode program, JsonNode nodeIds);
 
+    /** POST /v1/validate — {@code issues} is always an array (never null). */
     ValidateResult validate(ObjectNode program);
 
     record HealthResult(String status) {
@@ -59,8 +68,21 @@ public interface GoClient {
     }
 
     record ContentGenerateResult(ObjectNode program, JsonNode issues) {
+        public ContentGenerateResult {
+            if (issues == null || issues.isNull()) {
+                throw new IllegalArgumentException("issues must be a non-null array");
+            }
+            if (!issues.isArray()) {
+                throw new IllegalArgumentException("issues must be a JSON array");
+            }
+        }
     }
 
     record ValidateResult(JsonNode validationReport, JsonNode issues) {
+        public ValidateResult {
+            if (issues == null || issues.isNull() || !issues.isArray()) {
+                throw new IllegalArgumentException("issues must be a non-null JSON array");
+            }
+        }
     }
 }

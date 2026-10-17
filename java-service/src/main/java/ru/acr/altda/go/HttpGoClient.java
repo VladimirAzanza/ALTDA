@@ -118,10 +118,10 @@ public class HttpGoClient implements GoClient {
     public ContentGenerateResult generateContent(ObjectNode program, JsonNode nodeIds) {
         ObjectNode body = baseBody();
         body.set("program", program);
+        // null = full program; non-null = those nodes + dependents, skipping locked (docs/API.md)
         body.set("nodeIds", nodeIds == null ? objectMapper.nullNode() : nodeIds);
         JsonNode response = post(contentClient, "/v1/content", body);
-        JsonNode issues = response.has("issues") ? response.get("issues") : objectMapper.createArrayNode();
-        return new ContentGenerateResult((ObjectNode) response.get("program"), issues);
+        return new ContentGenerateResult((ObjectNode) response.get("program"), requireIssuesArray(response));
     }
 
     @Override
@@ -129,7 +129,16 @@ public class HttpGoClient implements GoClient {
         ObjectNode body = baseBody();
         body.set("program", program);
         JsonNode response = post(validateClient, "/v1/validate", body);
-        return new ValidateResult(response.get("validationReport"), response.get("issues"));
+        return new ValidateResult(response.get("validationReport"), requireIssuesArray(response));
+    }
+
+    /** Contract: issues is always an array, never null. */
+    private JsonNode requireIssuesArray(JsonNode response) {
+        JsonNode issues = response == null ? null : response.get("issues");
+        if (issues == null || issues.isNull() || !issues.isArray()) {
+            return objectMapper.createArrayNode();
+        }
+        return issues;
     }
 
     private ObjectNode baseBody() {

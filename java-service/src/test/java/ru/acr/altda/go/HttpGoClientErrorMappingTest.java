@@ -95,8 +95,9 @@ class HttpGoClientErrorMappingTest {
     }
 
     @Test
-    void llmTimeoutMapsTo504_marksFailed() {
-        enqueueError(504, GoClientException.LLM_TIMEOUT, "model timed out");
+    void llmTimeoutMapsTo504Only_never408() {
+        // Even if Go answered with 408, Java maps llm_timeout → canonical 504 only
+        enqueueError(408, GoClientException.LLM_TIMEOUT, "model timed out");
         ObjectNode program = mapper.createObjectNode().put("id", "p1");
 
         assertThatThrownBy(() -> client.generateContent(program, null))
@@ -106,9 +107,22 @@ class HttpGoClientErrorMappingTest {
                     assertThat(gce.getErrorCode()).isEqualTo(GoClientException.LLM_TIMEOUT);
                     assertThat(gce.isLlmOrTransportFailure()).isTrue();
                     assertThat(gce.canonicalHttpStatus()).isEqualTo(504);
+                    assertThat(gce.getHttpStatus()).isEqualTo(504);
                     assertThat(gce.shouldMarkProgramFailed(false)).isTrue();
                     assertThat(gce.shouldMarkProgramFailed(true)).isTrue();
                 });
+    }
+
+    @Test
+    void contentIssuesNullCoalescesToEmptyArray() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"schemaVersion\":\"1.1\",\"program\":{\"id\":\"p1\",\"schemaVersion\":\"1.1\"},\"issues\":null}"));
+        ObjectNode program = mapper.createObjectNode().put("id", "p1");
+        GoClient.ContentGenerateResult result = client.generateContent(program, null);
+        assertThat(result.issues().isArray()).isTrue();
+        assertThat(result.issues()).isEmpty();
     }
 
     @Test

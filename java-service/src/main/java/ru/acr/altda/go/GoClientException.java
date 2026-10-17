@@ -10,8 +10,8 @@ package ru.acr.altda.go;
  *   <li>{@code node_locked} — never marks the program {@code FAILED}; sync callers surface HTTP 409.</li>
  *   <li>{@code bad_request} / {@code schema_invalid} — sync: 4xx/422 to the UI, program unchanged;
  *       async pipeline steps: may mark {@code FAILED} (cannot return HTTP mid-job).</li>
- *   <li>{@code llm_timeout} / {@code llm_error} (and connection/read timeouts mapped to those) —
- *       mark the program {@code FAILED}.</li>
+ *   <li>{@code llm_timeout} (HTTP <b>504 only</b>) / {@code llm_error} (502), including
+ *       connection/read timeouts mapped to those codes — mark the program {@code FAILED}.</li>
  * </ul>
  */
 public class GoClientException extends RuntimeException {

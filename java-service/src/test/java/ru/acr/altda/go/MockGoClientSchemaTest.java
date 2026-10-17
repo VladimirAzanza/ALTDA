@@ -114,6 +114,30 @@ class MockGoClientSchemaTest {
     }
 
     @Test
+    void contentWithNodeIdsSkipsLockedDoesNotThrow() throws Exception {
+        MockGoClient client = new MockGoClient(MAPPER);
+        client.loadExamples();
+        ObjectNode program = MAPPER.createObjectNode();
+        program.put("id", "p1");
+        program.putObject("header").put("totalHours", 16);
+        ObjectNode module = program.putObject("curriculum").putArray("modules").addObject();
+        module.put("id", "M1");
+        module.putObject("_meta").put("locked", true);
+
+        ArrayNode nodeIds = MAPPER.createArrayNode().add("M1").add("M2");
+        GoClient.ContentGenerateResult result = client.generateContent(program, nodeIds);
+        assertThat(result.issues().isArray()).isTrue();
+        assertThat(result.program().path("generation").path("skippedLockedNodeIds"))
+                .extracting(n -> {
+                    java.util.List<String> ids = new java.util.ArrayList<>();
+                    n.forEach(x -> ids.add(x.asText()));
+                    return ids;
+                })
+                .asList()
+                .contains("M1");
+    }
+
+    @Test
     void regenerateLockedNodeReturnsNodeLocked() throws Exception {
         MockGoClient client = new MockGoClient(MAPPER);
         client.loadExamples();

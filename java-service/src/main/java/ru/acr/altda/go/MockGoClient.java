@@ -179,6 +179,8 @@ public class MockGoClient implements GoClient {
 
     @Override
     public ContentGenerateResult generateContent(ObjectNode program, JsonNode nodeIds) {
+        // Non-null nodeIds: regenerate those nodes + dependents, skipping locked (same as regenerate).
+        // Mock fills the whole program but records skipped locked ids in generation metadata.
         ObjectNode content = fullProgram.deepCopy();
         content.put("schemaVersion", SCHEMA_VERSION);
         content.put("id", program.path("id").asText());
@@ -186,6 +188,17 @@ public class MockGoClient implements GoClient {
 
         if (program.has("request")) {
             content.set("request", program.get("request").deepCopy());
+        }
+
+        Set<String> skippedLocked = new HashSet<>();
+        if (nodeIds != null && nodeIds.isArray() && !nodeIds.isEmpty()) {
+            Set<String> locked = collectLockedIds(program);
+            for (JsonNode idNode : nodeIds) {
+                String id = idNode.asText();
+                if (locked.contains(id)) {
+                    skippedLocked.add(id);
+                }
+            }
         }
 
         String programType = program.path("programType").asText(
@@ -262,7 +275,12 @@ public class MockGoClient implements GoClient {
         contentStep.put("durationMs", 1850);
         generation.put("embeddingTokens", 0);
         generation.put("costRub", 12.4);
+        if (!skippedLocked.isEmpty()) {
+            ArrayNode skipped = generation.putArray("skippedLockedNodeIds");
+            skippedLocked.forEach(skipped::add);
+        }
 
+        // issues is always an array, never null
         ArrayNode issues = objectMapper.createArrayNode();
         ObjectNode warnIssue = issues.addObject();
         warnIssue.put("ruleId", "SOURCE_UNVERIFIED");
@@ -459,10 +477,16 @@ public class MockGoClient implements GoClient {
         totals.put("lab", labSum);
         totals.put("selfStudy", selfSum);
         totals.put("assessment", assessSum);
+        // Same identities as docs/API.md and HOURS_* rules:
+        // contact = lecture+practice+lab; total = contact+selfStudy+assessment
         totals.put("contact", contactSum);
-        totals.put("total", lectureSum + practiceSum + labSum + selfSum + assessSum);
+        totals.put("total", contactSum + selfSum + assessSum);
     }
 
+    /**
+     * Allocator hour identities (every level):
+     * contact = lecture + practice + lab; total = contact + selfStudy + assessment.
+     */
     private static void putHours(
             ObjectNode hours,
             double lecture,
