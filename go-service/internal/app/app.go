@@ -7,9 +7,12 @@ import (
 	"strings"
 
 	httpserver "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http"
+	allocatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/allocate"
 	healthhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/health"
 	parsehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/parse"
 	stubhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/stub"
+	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
+	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocator"
 	parseservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/parse"
 )
 
@@ -31,6 +34,7 @@ func (app *App) Run(ctx context.Context) error {
 		httpserver.NewConfig(),
 		healthhandler.NewHandler(),
 		parsehandler.NewHandler(parseservice.NewService()),
+		allocatehandler.NewHandler(allocateservice.NewService(allocator.DefaultConfig())),
 		stubhandler.NewHandler(),
 	)
 

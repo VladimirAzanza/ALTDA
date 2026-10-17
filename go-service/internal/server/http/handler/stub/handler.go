@@ -12,7 +12,6 @@ import (
 var routes = []string{
 	"POST /v1/skeleton/generate",
 	"POST /v1/skeleton/regenerate",
-	"POST /v1/allocate",
 	"POST /v1/content",
 	"POST /v1/validate",
 }
