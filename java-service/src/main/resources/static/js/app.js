@@ -685,7 +685,7 @@
     return `
       <section class="panel stack">
         <h2>Выгрузка комплекта</h2>
-        <p class="muted">Статус: <strong>${escapeHtml(STATUS_LABELS[s.status] || s.status)}</strong>. JSON доступен сразу; .docx — в фазе 3.</p>
+        <p class="muted">Статус: <strong>${escapeHtml(STATUS_LABELS[s.status] || s.status)}</strong>. JSON и .docx доступны для скачивания.</p>
         <div class="row">
           <button type="button" class="btn" id="dl-json">Скачать JSON</button>
           <button type="button" class="btn btn-secondary" id="dl-docx">Скачать .docx</button>
