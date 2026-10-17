@@ -19,7 +19,7 @@ func loadExample(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(examplePath)
 	if err != nil {
-		t.Skipf("example not available: %v", err)
+		t.Fatalf("schema example not found: %v", err)
 	}
 	return data
 }

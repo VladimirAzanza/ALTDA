@@ -13,6 +13,10 @@ import (
 
 // Node wraps one JSON object: V is the typed view, raw holds all of its
 // original fields.
+//
+// Writing through V changes values, but it cannot remove a key: a field the
+// typed view leaves out (nil pointer or empty slice with omitempty) keeps the
+// value it had in raw.
 type Node[T any] struct {
 	V   T
 	raw map[string]json.RawMessage

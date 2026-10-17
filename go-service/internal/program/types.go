@@ -6,6 +6,7 @@ type Program = Node[Root]
 // Root lists the top-level blocks Go reads. Optional blocks are pointers:
 // nil means the key is absent from the program.
 type Root struct {
+	Status           string                  `json:"status,omitempty"`
 	Request          *Node[Request]          `json:"request,omitempty"`
 	Header           *Node[Header]           `json:"header,omitempty"`
 	Curriculum       *Node[Curriculum]       `json:"curriculum,omitempty"`
@@ -46,6 +47,16 @@ type Topic struct {
 	Weight *float64    `json:"weight,omitempty"`
 	Hours  Hours       `json:"hours"`
 	Meta   *Node[Meta] `json:"_meta,omitempty"`
+
+	// Activities is filled by the content step. Each is a Node so the fields
+	// Go does not read (content, delivery) survive a round trip.
+	Activities []Node[Activity] `json:"activities,omitempty"`
+}
+
+// Activity is one work kind of a topic. Kind "control" counts as assessment.
+type Activity struct {
+	Kind  string  `json:"kind"`
+	Hours float64 `json:"hours"`
 }
 
 type FinalAttestation struct {

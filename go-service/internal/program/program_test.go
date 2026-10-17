@@ -65,7 +65,7 @@ func TestRoundTripOfSchemaExamples(t *testing.T) {
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Skipf("example not available: %v", err)
+			t.Fatalf("schema example not found: %v", err)
 		}
 
 		_, want, got := roundTrip(t, string(data))
@@ -157,5 +157,17 @@ func TestIsLocked(t *testing.T) {
 		if got := topic.V.IsLocked(); got != want[i] {
 			t.Errorf("%s: IsLocked = %v, want %v", topic.V.ID, got, want[i])
 		}
+	}
+}
+
+func TestRoundTripKeepsActivityFields(t *testing.T) {
+	row := `{"lecture": 2, "practice": 0, "lab": 0, "selfStudy": 0, "assessment": 0, "contact": 2, "total": 2}`
+	in := `{"id": "p", "status": "content_ready", "curriculum": {"modules": [{"id": "M1", "hours": ` + row + `, "topics": [
+		{"id": "T1.1", "hours": ` + row + `, "activities": [
+			{"kind": "lecture", "hours": 2, "content": "Введение", "delivery": "onsite"}]}]}], "totals": ` + row + `}}`
+
+	_, want, got := roundTrip(t, in)
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("activity fields were lost\nwant: %v\n got: %v", want, got)
 	}
 }

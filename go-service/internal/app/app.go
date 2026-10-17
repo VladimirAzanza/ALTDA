@@ -11,9 +11,11 @@ import (
 	healthhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/health"
 	parsehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/parse"
 	stubhandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/stub"
+	validatehandler "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/handler/validate"
 	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocator"
 	parseservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/parse"
+	validateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/validate"
 )
 
 type App struct {
@@ -35,6 +37,7 @@ func (app *App) Run(ctx context.Context) error {
 		healthhandler.NewHandler(),
 		parsehandler.NewHandler(parseservice.NewService()),
 		allocatehandler.NewHandler(allocateservice.NewService(allocator.DefaultConfig())),
+		validatehandler.NewHandler(validateservice.NewService()),
 		stubhandler.NewHandler(),
 	)
 

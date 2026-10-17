@@ -1,0 +1,54 @@
+package validate
+
+// rule identifies one validation rule. The catalog below is the single place
+// where IDs, categories and severities are defined.
+type rule struct {
+	id       string
+	category Category
+	severity Severity
+}
+
+var (
+	ruleHoursContact           = rule{"HOURS_CONTACT", CategoryHours, SeverityError}
+	ruleHoursRowSum            = rule{"HOURS_ROW_SUM", CategoryHours, SeverityError}
+	ruleHoursTopicsEqModule    = rule{"HOURS_TOPICS_EQ_MODULE", CategoryHours, SeverityError}
+	ruleHoursTotalsField       = rule{"HOURS_TOTALS_FIELD", CategoryHours, SeverityError}
+	ruleHoursEqRequested       = rule{"HOURS_EQ_REQUESTED", CategoryHours, SeverityError}
+	ruleHoursPracticeShare     = rule{"HOURS_PRACTICE_SHARE", CategoryHours, SeverityError}
+	ruleHoursActivitiesEqTopic = rule{"HOURS_ACTIVITIES_EQ_TOPIC", CategoryHours, SeverityError}
+)
+
+// checker collects the result of every rule evaluation.
+type checker struct {
+	checks []Check
+}
+
+func (c *checker) check(r rule, passed bool, path, message string, related ...string) {
+	c.checks = append(c.checks, Check{
+		RuleID:     r.id,
+		Category:   r.category,
+		Severity:   r.severity,
+		Passed:     passed,
+		Message:    message,
+		Path:       path,
+		RelatedIDs: related,
+	})
+}
+
+func (c *checker) summary() Summary {
+	var s Summary
+	for _, check := range c.checks {
+		switch {
+		case check.Passed:
+			s.Passed++
+		case check.Severity == SeverityError:
+			s.Errors++
+		case check.Severity == SeverityWarning:
+			s.Warnings++
+		}
+		if !check.Passed && check.RuleID == "SOURCE_UNVERIFIED" {
+			s.UnverifiedSources++
+		}
+	}
+	return s
+}
