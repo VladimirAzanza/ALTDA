@@ -15,6 +15,28 @@ const maxVariants = 3
 // drafter, hours from the allocator.
 type Service interface {
 	Generate(ctx context.Context, p *program.Program) ([]Variant, error)
+
+	// Regenerate redoes part of the skeleton. Before the plan exists (the
+	// variants are not merged yet) it returns fresh variants; afterwards it
+	// rebuilds the requested modules inside the program. Exactly one of
+	// Program and Variants is set in the result.
+	Regenerate(ctx context.Context, p *program.Program, in RegenerateParams) (*RegenerateResult, error)
+}
+
+type RegenerateParams struct {
+	Comment string
+	// NodeIDs names modules or topics; empty means "infer them from the
+	// comment, or take every module".
+	NodeIDs []string
+	// RespectLocks refuses to touch locked nodes (explicitly requested ones
+	// give ErrNodeLocked; ones merely inferred are skipped).
+	RespectLocks bool
+}
+
+type RegenerateResult struct {
+	Program      *program.Program // set when the plan exists
+	Variants     []Variant        // set before the plan exists
+	ChangedPaths []string         // JSON Pointers to what changed
 }
 
 // Request is what a drafter needs to know, read from request.params.
@@ -26,6 +48,7 @@ type Request struct {
 	EntryLevel           string
 	StudyForm            string
 	FinalAttestationForm string
+	Comment              string // the methodologist's note when something is regenerated
 	TotalHours           float64
 	IsInternship         bool
 	MinPracticeShare     *float64
@@ -76,4 +99,18 @@ type VariantFinalAttestation struct {
 	Description string          `json:"description"`
 	OutcomeIDs  []string        `json:"outcomeIds"`
 	Hours       allocator.Hours `json:"hours"`
+}
+
+// Regenerator proposes replacements for some modules of a program whose
+// competencies are already fixed. Like the Drafter, it never decides hours.
+type Regenerator interface {
+	Regenerate(ctx context.Context, in RegenerateInput) ([]skeleton.Module, error)
+}
+
+type RegenerateInput struct {
+	Request  Request
+	Comment  string
+	Outcomes []string          // outcome IDs of the program's competencies
+	Current  []skeleton.Module // the whole current structure, for context
+	Targets  []string          // IDs of the modules to rebuild
 }

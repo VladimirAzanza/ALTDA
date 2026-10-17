@@ -7,25 +7,38 @@ import (
 	"log/slog"
 
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/program"
+	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocator"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/service/validate"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/skeleton"
 )
 
 type service struct {
-	drafter   Drafter
-	allocator allocator.Config
+	drafter     Drafter
+	regenerator Regenerator
+	allocator   allocator.Config
+	reallocate  allocateservice.Service
 }
 
-func NewService(drafter Drafter, allocatorConfig allocator.Config) Service {
-	return &service{drafter: drafter, allocator: allocatorConfig}
+func NewService(drafter Drafter, regenerator Regenerator, allocatorConfig allocator.Config) Service {
+	return &service{
+		drafter:     drafter,
+		regenerator: regenerator,
+		allocator:   allocatorConfig,
+		reallocate:  allocateservice.NewService(allocatorConfig),
+	}
 }
 
 func (s *service) Generate(ctx context.Context, p *program.Program) ([]Variant, error) {
+	return s.generate(ctx, p, "")
+}
+
+func (s *service) generate(ctx context.Context, p *program.Program, comment string) ([]Variant, error) {
 	req, err := requestFrom(p)
 	if err != nil {
 		return nil, err
 	}
+	req.Comment = comment
 
 	drafts, err := s.drafter.Draft(ctx, req)
 	if err != nil {

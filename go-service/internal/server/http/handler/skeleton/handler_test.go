@@ -16,16 +16,21 @@ import (
 
 func post(t *testing.T, svc skeletonservice.Service, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return postTo(t, svc, "/v1/skeleton/generate", body)
+}
+
+func postTo(t *testing.T, svc skeletonservice.Service, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	mux := http.NewServeMux()
 	NewHandler(svc).Register(mux)
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/skeleton/generate", strings.NewReader(body)))
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
 	return rec
 }
 
 func realService() skeletonservice.Service {
-	return skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocator.DefaultConfig())
+	return skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), skeletonservice.NewTemplateRegenerator(), allocator.DefaultConfig())
 }
 
 const program72 = `{"id": "p", "status": "clarifying", "request": {"rawText": "x", "params": {
@@ -74,6 +79,10 @@ func TestGenerateOK(t *testing.T) {
 type failingService struct{ err error }
 
 func (f failingService) Generate(context.Context, *program.Program) ([]skeletonservice.Variant, error) {
+	return nil, f.err
+}
+
+func (f failingService) Regenerate(context.Context, *program.Program, skeletonservice.RegenerateParams) (*skeletonservice.RegenerateResult, error) {
 	return nil, f.err
 }
 

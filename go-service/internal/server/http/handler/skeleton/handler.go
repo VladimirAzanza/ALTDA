@@ -9,6 +9,7 @@ import (
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/program"
 	httperror "github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/error"
 	"github.com/VladimirAzanza/ALTDA/go-service/internal/server/http/response"
+	allocateservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/allocate"
 	skeletonservice "github.com/VladimirAzanza/ALTDA/go-service/internal/service/skeleton"
 )
 
@@ -24,6 +25,7 @@ func NewHandler(skeletonService skeletonservice.Service) *Handler {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/skeleton/generate", h.Generate)
+	mux.HandleFunc("POST /v1/skeleton/regenerate", h.Regenerate)
 }
 
 type generateRequest struct {
@@ -67,8 +69,13 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 func toHTTPError(err error) error {
 	switch {
-	case errors.Is(err, skeletonservice.ErrInvalidProgram):
+	case errors.Is(err, skeletonservice.ErrInvalidProgram),
+		errors.Is(err, skeletonservice.ErrUnknownNode),
+		errors.Is(err, allocateservice.ErrNotEnoughHours),
+		errors.Is(err, allocateservice.ErrNothingToBalance):
 		return httperror.Wrap(httperror.BadRequest, err.Error(), err)
+	case errors.Is(err, skeletonservice.ErrNodeLocked):
+		return httperror.Wrap(httperror.NodeLocked, err.Error(), err)
 	case errors.Is(err, skeletonservice.ErrNoValidVariant):
 		return httperror.Wrap(httperror.LLMError, err.Error(), err)
 	default:

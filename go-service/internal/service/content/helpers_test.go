@@ -24,7 +24,7 @@ func approvedProgram(t *testing.T, hours float64, variantIndex int, extraParams 
 	if err := json.Unmarshal([]byte(`{"id": "p", "request": {"rawText": "x", "params": `+params+`}}`), &request); err != nil {
 		t.Fatal(err)
 	}
-	skeleton := skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocator.DefaultConfig())
+	skeleton := skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), skeletonservice.NewTemplateRegenerator(), allocator.DefaultConfig())
 	variants, err := skeleton.Generate(context.Background(), &request)
 	if err != nil {
 		t.Fatal(err)

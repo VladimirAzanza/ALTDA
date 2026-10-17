@@ -29,7 +29,7 @@ func paramsFor(hours float64, extra string) string {
 }
 
 func newService() Service {
-	return NewService(NewTemplateDrafter(), allocator.DefaultConfig())
+	return NewService(NewTemplateDrafter(), NewTemplateRegenerator(), allocator.DefaultConfig())
 }
 
 func generate(t *testing.T, params string) []Variant {
@@ -301,7 +301,7 @@ func TestUnusableDraftsAreDropped(t *testing.T) {
 		tooManyTopics.Modules[0].Topics[i].Prerequisites = []string{}
 	}
 
-	svc := NewService(fakeDrafter{[]skeleton.Draft{badWeights, goodDraft("A"), unknownOutcome, tooManyTopics}}, allocator.DefaultConfig())
+	svc := NewService(fakeDrafter{[]skeleton.Draft{badWeights, goodDraft("A"), unknownOutcome, tooManyTopics}}, NewTemplateRegenerator(), allocator.DefaultConfig())
 	variants, err := svc.Generate(context.Background(), programWith(t, paramsFor(72, "")))
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +320,7 @@ func TestNoUsableDraftIsAnError(t *testing.T) {
 	bad := goodDraft("A")
 	bad.Modules[0].Weight = 0.9
 
-	svc := NewService(fakeDrafter{[]skeleton.Draft{bad}}, allocator.DefaultConfig())
+	svc := NewService(fakeDrafter{[]skeleton.Draft{bad}}, NewTemplateRegenerator(), allocator.DefaultConfig())
 	_, err := svc.Generate(context.Background(), programWith(t, paramsFor(72, "")))
 	if !errors.Is(err, ErrNoValidVariant) {
 		t.Errorf("err = %v, want ErrNoValidVariant", err)
@@ -330,7 +330,7 @@ func TestNoUsableDraftIsAnError(t *testing.T) {
 func TestAtMostThreeVariants(t *testing.T) {
 	drafts := []skeleton.Draft{goodDraft("A"), goodDraft("B"), goodDraft("C"), goodDraft("D")}
 
-	svc := NewService(fakeDrafter{drafts}, allocator.DefaultConfig())
+	svc := NewService(fakeDrafter{drafts}, NewTemplateRegenerator(), allocator.DefaultConfig())
 	variants, err := svc.Generate(context.Background(), programWith(t, paramsFor(72, "")))
 	if err != nil {
 		t.Fatal(err)

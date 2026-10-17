@@ -11,6 +11,14 @@ import (
 )
 
 func main() {
+	// `app healthcheck` is what Docker runs: the image has no shell or curl.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := app.HealthCheck(context.Background()); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

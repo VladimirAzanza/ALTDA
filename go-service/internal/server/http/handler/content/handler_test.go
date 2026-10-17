@@ -43,7 +43,7 @@ func approvedProgramJSON(t *testing.T) string {
 	if err := json.Unmarshal([]byte(`{"id": "p", "request": {"rawText": "x", "params": `+params+`}}`), &request); err != nil {
 		t.Fatal(err)
 	}
-	variants, err := skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), allocator.DefaultConfig()).Generate(context.Background(), &request)
+	variants, err := skeletonservice.NewService(skeletonservice.NewTemplateDrafter(), skeletonservice.NewTemplateRegenerator(), allocator.DefaultConfig()).Generate(context.Background(), &request)
 	if err != nil {
 		t.Fatal(err)
 	}
