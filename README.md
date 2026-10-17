@@ -26,7 +26,7 @@ curl -sS -X POST http://localhost:8000/api/generate \
   -d '{"request":"ДПП ПК Анализ данных на Python, 72 ч","answers":{"entryLevel":"Базовый"}}'
 ```
 
-Health: `GET http://localhost:8000/health`. Unit tests: `cd java-service && ./mvnw test`. HTTP contract with Go: [`docs/API.md`](docs/API.md).
+Health: `GET http://localhost:8000/health`. UI: open `http://localhost:8000/` (vanilla SPA, Russian). Unit tests: `cd java-service && ./mvnw test`. Manual UI checklist: [`java-service/README.md`](java-service/README.md). HTTP contract with Go: [`docs/API.md`](docs/API.md).
 
 ## Резюме и ключевые решения
 

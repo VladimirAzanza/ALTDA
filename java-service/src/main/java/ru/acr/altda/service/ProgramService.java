@@ -11,6 +11,8 @@ import ru.acr.altda.api.dto.ContentApproveRequest;
 import ru.acr.altda.api.dto.CreateProgramRequest;
 import ru.acr.altda.api.dto.GenerateRequest;
 import ru.acr.altda.api.dto.GenerateResponse;
+import ru.acr.altda.api.dto.LockNodesRequest;
+import ru.acr.altda.api.dto.RegenerateRequest;
 import ru.acr.altda.api.dto.ReturnRequest;
 import ru.acr.altda.api.dto.SkeletonApproveRequest;
 import ru.acr.altda.domain.HistoryEntry;
@@ -225,6 +227,73 @@ public class ProgramService {
 
         asyncJobs.runContentAndValidate(id);
         return store.require(id);
+    }
+
+    /**
+     * Point regenerate: skeleton return or content section regenerate via Go.
+     */
+    public ProgramRecord regenerate(UUID id, RegenerateRequest body) {
+        ProgramRecord record = store.require(id);
+        assertEditable(record);
+        String scope = body.scope() == null ? "content" : body.scope();
+        String comment = body.comment() == null ? "точечная перегенерация" : body.comment();
+
+        if ("skeleton".equals(scope)) {
+            return returnSkeleton(id, new ReturnRequest(comment));
+        }
+
+        store.update(id, r -> {
+            ProgramStatus from = r.getStatus();
+            if (from != ProgramStatus.CONTENT_GENERATING) {
+                ProgramStatusMachine.assertTransition(from, ProgramStatus.CONTENT_GENERATING);
+                r.setStatus(ProgramStatus.CONTENT_GENERATING);
+            }
+            r.clearError();
+            r.setBusy(true);
+            r.addHistory(new HistoryEntry(
+                    Instant.now(), "content_regenerate", from, ProgramStatus.CONTENT_GENERATING,
+                    comment, null));
+        });
+        asyncJobs.runContentAndValidate(id);
+        return store.require(id);
+    }
+
+    public ProgramRecord lockNodes(UUID id, LockNodesRequest body) {
+        ProgramRecord record = store.require(id);
+        assertEditable(record);
+        store.update(id, r -> {
+            ObjectNode program = r.getProgram();
+            for (String nodeId : body.nodeIds()) {
+                applyLock(program, nodeId, body.locked());
+            }
+            r.setProgram(program);
+            r.addHistory(new HistoryEntry(
+                    Instant.now(),
+                    body.locked() ? "nodes_locked" : "nodes_unlocked",
+                    r.getStatus(),
+                    r.getStatus(),
+                    String.join(",", body.nodeIds()),
+                    null));
+        });
+        return store.require(id);
+    }
+
+    private void applyLock(JsonNode node, String nodeId, boolean locked) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            ObjectNode obj = (ObjectNode) node;
+            if (nodeId.equals(obj.path("id").asText(null))) {
+                ObjectNode meta = obj.withObject("/_meta");
+                meta.put("locked", locked);
+            }
+            obj.fields().forEachRemaining(e -> applyLock(e.getValue(), nodeId, locked));
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                applyLock(child, nodeId, locked);
+            }
+        }
     }
 
     /**

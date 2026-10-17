@@ -1,5 +1,8 @@
 package ru.acr.altda.domain;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+
 /**
  * Program lifecycle statuses.
  * Schema statuses match {@code program.schema.json}; {@link #FAILED} is a Java
@@ -23,8 +26,14 @@ public enum ProgramStatus {
         this.jsonValue = jsonValue;
     }
 
+    @JsonValue
     public String jsonValue() {
         return jsonValue;
+    }
+
+    @JsonCreator
+    public static ProgramStatus fromJsonValue(String value) {
+        return fromJson(value);
     }
 
     /** Whether this value may appear in {@code program.status} (schema enum). */

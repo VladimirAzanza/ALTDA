@@ -182,6 +182,29 @@ public class MockGoClient implements GoClient {
             }
         }
 
+        ObjectNode generation = content.putObject("generation");
+        ArrayNode steps = generation.putArray("steps");
+        ObjectNode parseStep = steps.addObject();
+        parseStep.put("step", "parse");
+        parseStep.put("model", "mock");
+        parseStep.put("promptTokens", 1200);
+        parseStep.put("completionTokens", 400);
+        parseStep.put("durationMs", 320);
+        ObjectNode skelStep = steps.addObject();
+        skelStep.put("step", "skeleton");
+        skelStep.put("model", "mock");
+        skelStep.put("promptTokens", 2800);
+        skelStep.put("completionTokens", 4900);
+        skelStep.put("durationMs", 2100);
+        ObjectNode contentStep = steps.addObject();
+        contentStep.put("step", "content");
+        contentStep.put("model", "mock");
+        contentStep.put("promptTokens", 4200);
+        contentStep.put("completionTokens", 9800);
+        contentStep.put("durationMs", 1850);
+        generation.put("embeddingTokens", 0);
+        generation.put("costRub", 12.4);
+
         ArrayNode changed = objectMapper.createArrayNode();
         changed.add("/lectures");
         changed.add("/assessment");

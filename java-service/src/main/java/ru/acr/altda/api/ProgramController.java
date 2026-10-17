@@ -12,8 +12,11 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.acr.altda.api.dto.ClarificationAnswerRequest;
 import ru.acr.altda.api.dto.ContentApproveRequest;
 import ru.acr.altda.api.dto.CreateProgramRequest;
+import ru.acr.altda.api.dto.ErrorResponse;
+import ru.acr.altda.api.dto.LockNodesRequest;
 import ru.acr.altda.api.dto.ProgramResponse;
 import ru.acr.altda.api.dto.ProgramSummaryResponse;
+import ru.acr.altda.api.dto.RegenerateRequest;
 import ru.acr.altda.api.dto.ReturnRequest;
 import ru.acr.altda.api.dto.SkeletonApproveRequest;
 import ru.acr.altda.domain.ProgramRecord;
@@ -94,5 +97,33 @@ public class ProgramController {
             @Valid @RequestBody ReturnRequest body
     ) {
         return mapper.toResponse(programService.returnContent(id, body));
+    }
+
+    @PostMapping("/{id}/regenerate")
+    public ProgramResponse regenerate(
+            @PathVariable UUID id,
+            @RequestBody RegenerateRequest body
+    ) {
+        return mapper.toResponse(programService.regenerate(id, body == null
+                ? new RegenerateRequest(null, null, "content")
+                : body));
+    }
+
+    @PostMapping("/{id}/lock")
+    public ProgramResponse lock(
+            @PathVariable UUID id,
+            @Valid @RequestBody LockNodesRequest body
+    ) {
+        return mapper.toResponse(programService.lockNodes(id, body));
+    }
+
+    /** Phase 3 placeholder: .docx export not implemented yet. */
+    @GetMapping("/{id}/export/docx")
+    public ResponseEntity<ErrorResponse> exportDocx(@PathVariable UUID id) {
+        programService.get(id);
+        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                .body(new ErrorResponse(
+                        "not_implemented",
+                        "Выгрузка .docx будет в фазе 3 (poi-tl). Скачайте JSON на вкладке «Выгрузка»."));
     }
 }
